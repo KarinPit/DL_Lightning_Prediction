@@ -4,8 +4,14 @@ import netCDF4 as nc
 import torch
 import numpy as np
 from datetime import datetime
+import matplotlib.pyplot as plt
+import torch.nn as nn
+import torch
+from torch.utils.data import TensorDataset, DataLoader, random_split
+import torch.nn.functional as F
 
 
+# Data proccessing functions
 def extract_timestamp(filename, is_entln=False):
     """Extracts the date and time from the filename of the raw files"""
 
@@ -53,6 +59,248 @@ def load_nc_layer(file_path, variable_name):
     return tensor
 
 
+# Deep learning functions
+
+
+def calculate_f1(logits, targets, threshold=0.1):
+    """מחשב כמה המפה שהמודל יצר דומה למפת האמת"""
+    probs = torch.sigmoid(logits)
+    preds = (probs > threshold).float()
+
+    tp = (preds * targets).sum()
+    fp = (preds * (1 - targets)).sum()
+    fn = ((1 - preds) * targets).sum()
+
+    precision = tp / (tp + fp + 1e-8)
+    recall = tp / (tp + fn + 1e-8)
+
+    f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
+    return f1.item()
+
+
+def visualize_prediction(model, dataset, device, idx=0):
+    """מציג השוואה בין הקלט, החיזוי והאמת"""
+    model.eval()
+    with torch.no_grad():
+        x, y_true = dataset[idx]
+        x_in = x.unsqueeze(0).to(device)
+
+        logits = model(x_in)
+        y_pred = torch.sigmoid(logits).cpu().squeeze().numpy()
+        y_true = y_true.squeeze().numpy()
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+        # מציגים שכבה אחת מהקלט (למשל CAPE - ערוץ 3)
+        axes[0].imshow(x[3].numpy(), cmap="jet")
+        axes[0].set_title("Input (CAPE)")
+
+        # החיזוי של המודל
+        im1 = axes[1].imshow(y_pred, cmap="magma")
+        axes[1].set_title("Model Prediction")
+        plt.colorbar(im1, ax=axes[1])
+
+        # האמת מהשטח
+        im2 = axes[2].imshow(y_true, cmap="magma")
+        axes[2].set_title("Ground Truth (ENTLN)")
+        plt.colorbar(im2, ax=axes[2])
+
+        plt.show()
+
+
+def train_model(model, train_loader, optimizer, criterion, num_epochs, device):
+    train_losses = []
+    train_f1s = []
+
+    for epoch in range(1, num_epochs + 1):
+        model.train()
+        total_loss, total_f1 = 0.0, 0.0
+
+        print(f"Starting Epoch {epoch}...")
+
+        for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+
+            optimizer.zero_grad()
+            logits = model(xb)
+            loss = criterion(logits, yb)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item() * xb.size(0)
+            total_f1 += calculate_f1(logits, yb) * xb.size(0)
+
+        avg_loss = total_loss / len(train_loader.dataset)
+        avg_f1 = total_f1 / len(train_loader.dataset)
+
+        train_losses.append(avg_loss)
+        train_f1s.append(avg_f1)
+        print(f"Epoch {epoch:02d} | Loss: {avg_loss:.4f} | F1 (Accuracy): {avg_f1:.4f}")
+
+    return train_losses, train_f1s
+
+
+def visualize_prediction(model, dataset, device, idx=0):
+    """מציג השוואה בין הקלט, מפת ההסתברויות והאמת מהשטח"""
+    model.eval()
+    with torch.no_grad():
+        x, y_true = dataset[idx]
+        # מוסיפים מימד Batch ושולחים ל-MPS
+        x_in = x.unsqueeze(0).to(device)
+
+        # הרצת המודל
+        logits = model(x_in)
+        # הפיכה להסתברות (0 עד 1)
+        probs = torch.sigmoid(logits).cpu().squeeze().numpy()
+        y_true = y_true.squeeze().numpy()
+
+        fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+
+        # 1. הצגת קלט (למשל LPI או CAPE)
+        # נבחר להציג את ה-LPI (ערוץ 2) כי הוא לרוב הכי קשור לברקים
+        im0 = axes[0].imshow(x[2].numpy(), cmap="viridis")
+        axes[0].set_title(f"Input Feature (LPI) - Sample {idx}")
+        plt.colorbar(im0, ax=axes[0])
+
+        # 2. מפת ההסתברויות (החיזוי של המודל)
+        # נשתמש ב-vmin/vmax כדי לוודא שהסקלה היא תמיד 0 עד 1
+        im1 = axes[1].imshow(probs, cmap="hot", vmin=0, vmax=1)
+        axes[1].set_title("Predicted Probability (0-1)")
+        plt.colorbar(im1, ax=axes[1])
+
+        # 3. האמת מהשטח (ENTLN)
+        im2 = axes[2].imshow(y_true, cmap="gray")
+        axes[2].set_title("Ground Truth (Actual Lightning)")
+        axes[2].imshow(y_true, cmap="gray", vmin=0, vmax=1)
+        plt.colorbar(im2, ax=axes[2])
+
+        plt.tight_layout()
+        plt.show()
+
+
+# Deep Learning Classes
+
+
+class DoubleConv(nn.Module):
+    """(convolution => [BN] => ReLU) * 2"""
+
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.double_conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.double_conv(x)
+
+
+class Down(nn.Module):
+    """Downscaling with maxpool then double conv"""
+
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.maxpool_conv = nn.Sequential(
+            nn.MaxPool2d(2), DoubleConv(in_channels, out_channels)
+        )
+
+    def forward(self, x):
+        return self.maxpool_conv(x)
+
+
+class Up(nn.Module):
+    """Upscaling then double conv"""
+
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.up = nn.ConvTranspose2d(
+            in_channels, in_channels // 2, kernel_size=2, stride=2
+        )
+        self.conv = DoubleConv(in_channels, out_channels)
+
+    def forward(self, x1, x2):
+        x1 = self.up(x1)
+
+        # --- התיקון כאן: חישוב הפרשי הגדלים ---
+        diffY = x2.size()[2] - x1.size()[2]
+        diffX = x2.size()[3] - x1.size()[3]
+
+        # הוספת Padding אם חסר פיקסל (משמאל, מימין, מלמעלה, מלמטה)
+        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
+
+        # עכשיו הגדלים זהים ואפשר לחבר!
+        x = torch.cat([x2, x1], dim=1)
+        return self.conv(x)
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.8, gamma=2, reduction="mean"):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        # inputs הם ה-logits מהמודל
+        # targets הם ה-labels (0 או 1)
+
+        ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+        pt = torch.exp(-ce_loss)  # pt זו ההסתברות שהמודל צדק
+
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == "mean":
+            return focal_loss.mean()
+        elif self.reduction == "sum":
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+
+class UNet(nn.Module):
+    def __init__(self, n_channels=4, n_classes=1):
+        super(UNet, self).__init__()
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+
+        # Encoder (הצד היורד)
+        self.inc = DoubleConv(n_channels, 64)
+        self.down1 = Down(64, 128)
+        self.down2 = Down(128, 256)
+        self.down3 = Down(256, 512)
+        self.down4 = Down(512, 1024)  # Bottleneck
+
+        # Decoder (הצד העולה)
+        self.up1 = Up(1024, 512)
+        self.up2 = Up(512, 256)
+        self.up3 = Up(256, 128)
+        self.up4 = Up(128, 64)
+
+        # שכבת פלט - מוציאה ערוץ 1 (ENTLN)
+        self.outc = nn.Conv2d(64, n_classes, kernel_size=1)
+
+    def forward(self, x):
+        # Encoder path
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+
+        # Decoder path עם Skip Connections
+        x = self.up1(x5, x4)
+        x = self.up2(x, x3)
+        x = self.up3(x, x2)
+        x = self.up4(x, x1)
+
+        logits = self.outc(x)
+        return logits
+
+
 if __name__ == "__main__":
     case_name = "Case1_Nov_2022_23_25"
     atm_params = ["KI", "CAPE2D", "LPI", "PREC_RATE"]
@@ -72,6 +320,67 @@ if __name__ == "__main__":
 
     if tensors_exist:
         print("X and y tensors available. Skipping tensor creation and saving!")
+
+        X = torch.load(os.path.join(tensor_save_path, "X_final_2880.pt"))
+        y = torch.load(os.path.join(tensor_save_path, "Y_final_2880.pt"))
+
+        # נרמול גלובלי לכל ערוץ (4 ערוצים)
+        for c in range(X.shape[1]):
+            channel_min = X[:, c, :, :].min()
+            channel_max = X[:, c, :, :].max()
+            X[:, c, :, :] = (X[:, c, :, :] - channel_min) / (
+                channel_max - channel_min + 1e-8
+            )
+
+        print("Normalization complete. All values are between 0 and 1.")
+
+        full_dataset = TensorDataset(X, y)
+
+        train_size = int(0.8 * len(full_dataset))
+        val_size = len(full_dataset) - train_size
+
+        train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+        # train_dataset, val_dataset = random_split(
+        #     full_dataset, [100, len(full_dataset) - 100]
+        # )  # Run model on smaller portion of the data to make sure it runs correctly
+
+        train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False)
+
+        device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+        print(f"Using device: {device}")
+
+        model = UNet(n_channels=4, n_classes=1).to(device)
+
+        # נניח שרק 0.1% מהפיקסלים הם ברקים, ניתן להם משקל של פי 100
+        pos_weight = torch.tensor([5000.0]).to(device)
+        # criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        # criterion = nn.BCEWithLogitsLoss()
+
+        # alpha=0.95 אומר שאנחנו נותנים משקל גבוה מאוד למחלקה החיובית (ברקים)
+        # gamma=2 אומר שאנחנו "משתיקים" חזק פיקסלים שהמודל כבר בטוח בהם
+        criterion = FocalLoss(alpha=0.95, gamma=2)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+        num_epochs = 20
+        train_losses, train_f1s = train_model(
+            model, train_loader, optimizer, criterion, num_epochs, device
+        )
+
+        plt.figure(figsize=(12, 5))
+        plt.subplot(1, 2, 1)
+        plt.plot(train_losses)
+        plt.title("Loss")
+        plt.subplot(1, 2, 2)
+        plt.plot(train_f1s)
+        plt.title("F1-Score (Similarity)")
+        plt.show()
+
+        # נבחר דגימה אקראית מתוך ה-Validation set
+        # עדיף לבדוק כמה אינדקסים (למשל 0, 10, 50) כדי לראות מקרים שונים
+        print("Visualizing results...")
+        for i in [0, 10, 20]:
+            visualize_prediction(model, val_dataset, device, idx=i)
 
     else:
         all_keys_sets = (
@@ -183,218 +492,3 @@ if __name__ == "__main__":
             print(
                 "No samples were created. Check if timestamps match between Ens and ENTLN."
             )
-
-
-# import os
-# import re
-# from PIL import Image
-# import matplotlib.pyplot as plt
-# import numpy as np
-# import torchvision
-# import torch
-# import torch.nn as nn
-# import torch.nn.functional as F
-# import torch.optim as optim
-
-
-# # Classes
-
-# class DoubleConv(nn.Module):
-#     """(convolution => [BN] => ReLU) * 2"""
-
-#     def __init__(self, in_channels, out_channels):
-#         super().__init__()
-#         self.double_conv = nn.Sequential(
-#             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-#             nn.BatchNorm2d(out_channels),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-#             nn.BatchNorm2d(out_channels),
-#             nn.ReLU(inplace=True),
-#         )
-
-#     def forward(self, x):
-#         return self.double_conv(x)
-
-
-# class Down(nn.Module):
-#     """Downscaling with maxpool then double conv"""
-
-#     def __init__(self, in_channels, out_channels):
-#         super().__init__()
-#         self.maxpool_conv = nn.Sequential(
-#             nn.MaxPool2d(2), DoubleConv(in_channels, out_channels)
-#         )
-
-#     def forward(self, x):
-#         return self.maxpool_conv(x)
-
-
-# class Up(nn.Module):
-#     """Upscaling then double conv"""
-
-#     def __init__(self, in_channels, out_channels):
-#         super().__init__()
-#         self.up = nn.ConvTranspose2d(
-#             in_channels, in_channels // 2, kernel_size=2, stride=2
-#         )
-#         self.conv = DoubleConv(in_channels, out_channels)
-
-#     def forward(self, x1, x2):
-#         x1 = self.up(x1)
-#         # מחברים את ה-Skip Connection מה-Encoder (x2) למידע החדש (x1)
-#         x = torch.cat([x2, x1], dim=1)
-#         return self.conv(x)
-
-
-# class UNet(nn.Module):
-#     def __init__(self, n_channels=12, n_classes=1):
-#         super(UNet, self).__init__()
-#         self.n_channels = n_channels
-#         self.n_classes = n_classes
-
-#         # Encoder (הצד היורד)
-#         self.inc = DoubleConv(n_channels, 64)
-#         self.down1 = Down(64, 128)
-#         self.down2 = Down(128, 256)
-#         self.down3 = Down(256, 512)
-#         self.down4 = Down(512, 1024)  # Bottleneck
-
-#         # Decoder (הצד העולה)
-#         self.up1 = Up(1024, 512)
-#         self.up2 = Up(512, 256)
-#         self.up3 = Up(256, 128)
-#         self.up4 = Up(128, 64)
-
-#         # שכבת פלט - מוציאה ערוץ 1 (ENTLN)
-#         self.outc = nn.Conv2d(64, n_classes, kernel_size=1)
-
-#     def forward(self, x):
-#         # Encoder path
-#         x1 = self.inc(x)
-#         x2 = self.down1(x1)
-#         x3 = self.down2(x2)
-#         x4 = self.down3(x3)
-#         x5 = self.down4(x4)
-
-#         # Decoder path עם Skip Connections
-#         x = self.up1(x5, x4)
-#         x = self.up2(x, x3)
-#         x = self.up3(x, x2)
-#         x = self.up4(x, x1)
-
-#         logits = self.outc(x)
-#         return logits
-
-
-# def calculate_f1(logits, targets, threshold=0.5):
-#     """מחשב כמה המפה שהמודל יצר דומה למפת האמת"""
-#     probs = torch.sigmoid(logits)
-#     preds = (probs > threshold).float()
-
-#     tp = (preds * targets).sum()
-#     fp = (preds * (1 - targets)).sum()
-#     fn = ((1 - preds) * targets).sum()
-
-#     precision = tp / (tp + fp + 1e-8)
-#     recall = tp / (tp + fn + 1e-8)
-
-#     f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
-#     return f1.item()
-
-
-# def visualize_prediction(model, dataset, device, idx=0):
-#     """מציג השוואה בין הקלט, החיזוי והאמת"""
-#     model.eval()
-#     with torch.no_grad():
-#         x, y_true = dataset[idx]
-#         x_in = x.unsqueeze(0).to(device)
-
-#         logits = model(x_in)
-#         y_pred = torch.sigmoid(logits).cpu().squeeze().numpy()
-#         y_true = y_true.squeeze().numpy()
-
-#         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-
-#         # מציגים שכבה אחת מהקלט (למשל CAPE - ערוץ 3)
-#         axes[0].imshow(x[3].numpy(), cmap="jet")
-#         axes[0].set_title("Input (CAPE)")
-
-#         # החיזוי של המודל
-#         im1 = axes[1].imshow(y_pred, cmap="magma")
-#         axes[1].set_title("Model Prediction")
-#         plt.colorbar(im1, ax=axes[1])
-
-#         # האמת מהשטח
-#         im2 = axes[2].imshow(y_true, cmap="magma")
-#         axes[2].set_title("Ground Truth (ENTLN)")
-#         plt.colorbar(im2, ax=axes[2])
-
-#         plt.show()
-
-
-# def train_model(model, train_loader, optimizer, criterion, num_epochs, device):
-#     train_losses = []
-#     train_f1s = []
-
-#     for epoch in range(1, num_epochs + 1):
-#         model.train()
-#         total_loss, total_f1 = 0.0, 0.0
-
-#         for xb, yb in train_loader:
-#             xb, yb = xb.to(device), yb.to(device)
-
-#             optimizer.zero_grad()
-#             logits = model(xb)
-#             loss = criterion(logits, yb)
-#             loss.backward()
-#             optimizer.step()
-
-#             total_loss += loss.item() * xb.size(0)
-#             total_f1 += calculate_f1(logits, yb) * xb.size(0)
-
-#         avg_loss = total_loss / len(train_loader.dataset)
-#         avg_f1 = total_f1 / len(train_loader.dataset)
-
-#         train_losses.append(avg_loss)
-#         train_f1s.append(avg_f1)
-#         print(f"Epoch {epoch:02d} | Loss: {avg_loss:.4f} | F1 (Accuracy): {avg_f1:.4f}")
-
-#     return train_losses, train_f1s
-
-
-# if __name__ == "__main__":
-#     data_folder = "/Users/karinpitlik/Desktop/DataScience/Thesis/Case1_Nov_2022_23_25/Ens/Graphs/UNITED/4by4/3_hours/jpeg"
-#     data_map = organize_lightning_data(data_folder)
-
-#     dataset = LightningDataset(data_map=data_map, folder_path=data_folder)
-#     train_loader = torch.utils.data.DataLoader(dataset, batch_size=2, shuffle=False)
-#     for x_batch, y_batch in train_loader:
-#         pass
-
-#     net = UNet().to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-#     criterion = nn.BCEWithLogitsLoss()
-#     optimizer = optim.Adam(net.parameters(), lr=0.001)
-#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-#     # test_input = torch.randn(2, 12, 256, 256)
-#     # output = model(test_input)
-#     # print(f"Input shape: {test_input.shape}")
-#     # print(f"Output shape: {output.shape}")  # אמור להיות [2, 1, 256, 256]
-#     # show_results(tensor, ["ki", "cape", "precip", "lpi"])
-
-#     # -----------------------------------------------------------------------   #
-#     # ---------------------------train & plots-------------------------------   #
-#     # -----------------------------------------------------------------------   #
-
-#     num_epochs = 10
-#     losses, f1s = train_model(net, train_loader, optimizer, criterion, num_epochs, device)
-
-#     # הצגת גרפים
-#     plt.figure(figsize=(12, 5))
-#     plt.subplot(1, 2, 1); plt.plot(losses); plt.title("Loss")
-#     plt.subplot(1, 2, 2); plt.plot(f1s); plt.title("F1-Score (Similarity)")
-#     plt.show()
-
-#     # ויזואליזציה של תוצאה אחת
-#     visualize_prediction(net, dataset, device, idx=0)
