@@ -64,111 +64,125 @@ if __name__ == "__main__":
         f"/Users/karinpitlik/Desktop/DataScience/Thesis/{case_name}/Ens/Tensors"
     )
 
-    all_keys_sets = (
-        []
-    )  # This will store all the available timestamps for later intersection
+    tensors_exist = False
+    if os.path.exists(tensor_save_path):
+        files = os.listdir(tensor_save_path)
+        if "X_final_2880.pt" in files and "Y_final_2880.pt" in files:
+            tensors_exist = True
 
-    # Loop over the files in the ENTLN folder and extract all existing timestamps
-    entln_map = {}
-    if os.path.exists(entln_folder):
-        for file in os.listdir(entln_folder):
-            if file.endswith(".nc"):
-                ts = extract_timestamp(file, is_entln=True)
-                if ts:
-                    entln_map[ts] = file
+    if tensors_exist:
+        print("X and y tensors available. Skipping tensor creation and saving!")
 
-    # Loop over the files in each atm parameter's folder and extract all existing timestamps
-    param_maps = {}
-    all_param_times = []
-
-    for param in atm_params:
-        data_folder = os.path.join(main_folder, param)
-        if not os.path.exists(data_folder):
-            continue
-
-        param_maps[param] = {}
-        current_param_times = set()
-
-        for file in os.listdir(data_folder):
-            if file.endswith(".nc"):
-                ts = extract_timestamp(file)
-                if ts:
-                    ens_match = re.search(r"_(\d{1,2})_", file)
-                    ens_id = f"{int(ens_match.group(1)):02d}" if ens_match else "00"
-
-                    # Each timestamp has a number of ensemble ids! so the ensemble id is also part of the key (to avoid ts overide previous ens ts)
-                    combined_key = f"{ens_id}_{ts}"
-                    param_maps[param][combined_key] = file
-                    current_param_times.add(ts)
-
-        all_param_times.append(current_param_times)
-
-    # Intersection of the ts in the ENTLN ts set and the atm parameter ts set
-    all_keys_sets = all_param_times + [set(entln_map.keys())]
-    common_timestamps = set.intersection(*all_keys_sets)
-    print(f"Found {len(common_timestamps)} common timestamps.")
-
-    # List of available ens ids
-    ens_list = [f"{i:02d}" for i in range(11)]
-
-    all_x_samples = []
-    all_y_samples = []
-
-    # This loop goes over all available timestamps and converts the .nc files to tensors
-    for ts in sorted(common_timestamps):
-        for ens_id in ens_list:
-            combined_key = f"{ens_id}_{ts}"
-
-            # Check if the ens id is available in all atm parameters
-            if all(combined_key in param_maps[p] for p in atm_params):
-                current_tensors = []
-                for param in atm_params:
-                    file_name = param_maps[param][combined_key]
-                    file_path = os.path.join(main_folder, param, file_name)
-                    t = load_nc_layer(file_path, param)
-                    if t is not None:
-                        current_tensors.append(t)
-
-                if len(current_tensors) == len(atm_params):
-                    x_tensor = torch.stack(
-                        current_tensors, dim=0
-                    )  # Create a [4, 249, 249] tensor
-
-                    y_file_name = entln_map[ts]
-                    y_file_path = os.path.join(entln_folder, y_file_name)
-                    y_tensor = load_nc_layer(
-                        y_file_path, "ildn"
-                    )  # Create a [1, 249, 249] tensor
-
-                    # All tensors are added to the lists in order to unite them to two tensors (one for x and one for y)
-                    if y_tensor is not None:
-                        all_x_samples.append(x_tensor)
-                        all_y_samples.append(y_tensor.unsqueeze(0))
-
-    print(f"Total X samples: {len(all_x_samples)}")
-
-    # Unite the tensors in the lists to: X_tensor shape- [2880, 4, 249, 249] , y_tensor shape- [2880, 1, 249, 249]
-    if len(all_x_samples) > 0:
-        final_x_tensor = torch.stack(all_x_samples, dim=0)
-        final_y_tensor = torch.stack(all_y_samples, dim=0)
-
-        print("-" * 30)
-        print(f"Final X shape: {final_x_tensor.shape}")
-        print(f"Final Y shape: {final_y_tensor.shape}")
-        print(
-            f"Total memory: {final_x_tensor.element_size() * final_x_tensor.nelement() / 1e6:.2f} MB"
-        )
-
-        # Save tensors to disk to avoid memory usage
-        if not os.path.exists(tensor_save_path):
-            os.makedirs(tensor_save_path)
-
-        torch.save(final_x_tensor, os.path.join(tensor_save_path, "X_final_2880.pt"))
-        torch.save(final_y_tensor, os.path.join(tensor_save_path, "Y_final_2880.pt"))
     else:
-        print(
-            "No samples were created. Check if timestamps match between Ens and ENTLN."
-        )
+        all_keys_sets = (
+            []
+        )  # This will store all the available timestamps for later intersection
+
+        # Loop over the files in the ENTLN folder and extract all existing timestamps
+        entln_map = {}
+        if os.path.exists(entln_folder):
+            for file in os.listdir(entln_folder):
+                if file.endswith(".nc"):
+                    ts = extract_timestamp(file, is_entln=True)
+                    if ts:
+                        entln_map[ts] = file
+
+        # Loop over the files in each atm parameter's folder and extract all existing timestamps
+        param_maps = {}
+        all_param_times = []
+
+        for param in atm_params:
+            data_folder = os.path.join(main_folder, param)
+            if not os.path.exists(data_folder):
+                continue
+
+            param_maps[param] = {}
+            current_param_times = set()
+
+            for file in os.listdir(data_folder):
+                if file.endswith(".nc"):
+                    ts = extract_timestamp(file)
+                    if ts:
+                        ens_match = re.search(r"_(\d{1,2})_", file)
+                        ens_id = f"{int(ens_match.group(1)):02d}" if ens_match else "00"
+
+                        # Each timestamp has a number of ensemble ids! so the ensemble id is also part of the key (to avoid ts overide previous ens ts)
+                        combined_key = f"{ens_id}_{ts}"
+                        param_maps[param][combined_key] = file
+                        current_param_times.add(ts)
+
+            all_param_times.append(current_param_times)
+
+        # Intersection of the ts in the ENTLN ts set and the atm parameter ts set
+        all_keys_sets = all_param_times + [set(entln_map.keys())]
+        common_timestamps = set.intersection(*all_keys_sets)
+        print(f"Found {len(common_timestamps)} common timestamps.")
+
+        # List of available ens ids
+        ens_list = [f"{i:02d}" for i in range(11)]
+
+        all_x_samples = []
+        all_y_samples = []
+
+        # This loop goes over all available timestamps and converts the .nc files to tensors
+        for ts in sorted(common_timestamps):
+            for ens_id in ens_list:
+                combined_key = f"{ens_id}_{ts}"
+
+                # Check if the ens id is available in all atm parameters
+                if all(combined_key in param_maps[p] for p in atm_params):
+                    current_tensors = []
+                    for param in atm_params:
+                        file_name = param_maps[param][combined_key]
+                        file_path = os.path.join(main_folder, param, file_name)
+                        t = load_nc_layer(file_path, param)
+                        if t is not None:
+                            current_tensors.append(t)
+
+                    if len(current_tensors) == len(atm_params):
+                        x_tensor = torch.stack(
+                            current_tensors, dim=0
+                        )  # Create a [4, 249, 249] tensor
+
+                        y_file_name = entln_map[ts]
+                        y_file_path = os.path.join(entln_folder, y_file_name)
+                        y_tensor = load_nc_layer(
+                            y_file_path, "ildn"
+                        )  # Create a [1, 249, 249] tensor
+
+                        # All tensors are added to the lists in order to unite them to two tensors (one for x and one for y)
+                        if y_tensor is not None:
+                            all_x_samples.append(x_tensor)
+                            all_y_samples.append(y_tensor.unsqueeze(0))
+
+        print(f"Total X samples: {len(all_x_samples)}")
+
+        # Unite the tensors in the lists to: X_tensor shape- [2880, 4, 249, 249] , y_tensor shape- [2880, 1, 249, 249]
+        if len(all_x_samples) > 0:
+            final_x_tensor = torch.stack(all_x_samples, dim=0)
+            final_y_tensor = torch.stack(all_y_samples, dim=0)
+
+            print("-" * 30)
+            print(f"Final X shape: {final_x_tensor.shape}")
+            print(f"Final Y shape: {final_y_tensor.shape}")
+            print(
+                f"Total memory: {final_x_tensor.element_size() * final_x_tensor.nelement() / 1e6:.2f} MB"
+            )
+
+            # Save tensors to disk to avoid memory usage
+            if not os.path.exists(tensor_save_path):
+                os.makedirs(tensor_save_path)
+
+            torch.save(
+                final_x_tensor, os.path.join(tensor_save_path, "X_final_2880.pt")
+            )
+            torch.save(
+                final_y_tensor, os.path.join(tensor_save_path, "Y_final_2880.pt")
+            )
+        else:
+            print(
+                "No samples were created. Check if timestamps match between Ens and ENTLN."
+            )
 
 
 # import os
@@ -184,40 +198,6 @@ if __name__ == "__main__":
 
 
 # # Classes
-
-
-# class LightningDataset(torch.utils.data.Dataset):
-#     def __init__(self, data_map, folder_path):
-#         self.data_map = data_map
-#         self.folder_path = folder_path
-#         self.timestamps = list(data_map.keys())
-
-#     def __len__(self):
-#         return len(self.timestamps)
-
-#     def __getitem__(self, idx):
-#         ts = self.timestamps[idx]
-#         files = self.data_map[ts]
-
-#         # get path of ki & total_prec & cape's image path
-#         x_atm_path = os.path.join(self.folder_path, files["x_paths"][0])
-#         ki, cape, precip = get_aligned_tensors(x_atm_path)
-
-#         # get path of entln & ds & lpi's image path
-#         y_file_path = os.path.join(self.folder_path, files["y_path"])
-#         entln, ds, lpi = get_aligned_tensors(y_file_path)
-
-#         # rearange the tensors to group atm' parameters together, ignoring ds
-#         x_tensor = torch.cat([ki, cape, precip, lpi], dim=0)
-
-#         # entln is the y_tensor
-#         y_tensor = entln.mean(dim=0, keepdim=True)
-#         y_tensor = (y_tensor - y_tensor.min()) / (
-#             y_tensor.max() - y_tensor.min() + 1e-8
-#         )
-
-#         return x_tensor, y_tensor
-
 
 # class DoubleConv(nn.Module):
 #     """(convolution => [BN] => ReLU) * 2"""
@@ -307,81 +287,6 @@ if __name__ == "__main__":
 #         return logits
 
 
-# # Important Functions
-
-
-# def organize_lightning_data(folder_path):
-#     """
-#     Get all the case's images in a given folder, and construct a dictionary where the key is the timestep/interval and the value is the image's path
-
-#     Args:
-#         folder_path: str, the path to the given images.
-#     """
-
-#     # dict to containt all atm' parameters and their paths
-#     data_map = {}
-
-#     for filename in os.listdir(folder_path):
-#         # extract date and hour from image name
-#         match = re.search(r"(\d{4}-\d{2}-\d{2}_\d{2}_\d{2}_\d{2})", filename)
-#         if not match:
-#             continue
-
-#         timestamp = match.group(1)
-
-#         if timestamp not in data_map:
-#             data_map[timestamp] = {"x_paths": [], "y_path": None}
-
-#         # identify the image layout (there are two types)
-#         if "ENTLN" in filename in filename:
-#             data_map[timestamp]["y_path"] = filename
-#         else:
-#             data_map[timestamp]["x_paths"].append(filename)
-
-#     # arrange the dict in a chronological order
-#     sorted_timestamps = sorted(data_map.keys())
-#     sorted_data_map = {ts: data_map[ts] for ts in sorted_timestamps}
-
-#     return sorted_data_map
-
-
-# def get_aligned_tensors(image_path, target_size=(256, 256)):
-#     """
-#     Get an image path, extract each subplot inside the given image, and transform each subplot to a gray scaled and resized tensor.
-
-#     Args:
-#         image_path: str, the path to a given image.
-#         target_size: tuple, the desired tensor size.
-#     """
-
-#     img = Image.open(image_path)
-#     width, height = img.size
-#     step = width // 3
-#     top_start = 200
-
-#     transform_pipeline = torchvision.transforms.Compose(
-#         [
-#             torchvision.transforms.ToTensor(),
-#             torchvision.transforms.Resize(target_size),
-#         ]
-#     )
-
-#     tensors = []
-#     for i in range(3):
-#         left = i * step
-#         right = (i + 1) * step
-#         cropped = img.crop((left, top_start, right, height))
-
-#         t_part = transform_pipeline(cropped)
-#         t_part = clear_map_artifacts(t_part)
-
-#         tensors.append(t_part)
-
-#     return (
-#         tensors  # returns list of tensors in this format- [tensor1, tensor2, tensor3]
-#     )
-
-
 # def calculate_f1(logits, targets, threshold=0.5):
 #     """מחשב כמה המפה שהמודל יצר דומה למפת האמת"""
 #     probs = torch.sigmoid(logits)
@@ -458,45 +363,6 @@ if __name__ == "__main__":
 #     return train_losses, train_f1s
 
 
-# ######### Helper functions #########
-
-
-# def imshow(img):
-#     npimg = img.numpy()
-#     plt.imshow(np.transpose(npimg, (1, 2, 0)))
-
-
-# def clear_map_artifacts(tensor):
-#     white_mask = tensor.mean(dim=0) > 0.95
-#     tensor[:, white_mask] = 0
-
-#     width = tensor.shape[2]
-#     colorbar_start = int(width * 0.9)
-#     tensor[:, :, colorbar_start:] = 0
-#     return tensor
-
-
-# def show_results(tensor, titles=None):
-#     num_layers = tensor.shape[0]
-#     fig, axes = plt.subplots(1, num_layers, figsize=(15, 5))
-#     print("TENSOR SHAPE", num_layers)
-
-#     if num_layers == 1:
-#         axes = [axes]
-
-#     for i in range(num_layers):
-#         layer = tensor[i].numpy()
-#         axes[i].imshow(layer, cmap="jet")
-#         if titles and i < len(titles):
-#             axes[i].set_title(titles[i])
-#         axes[i].axis("off")
-
-#     plt.tight_layout()
-#     plt.show()
-
-
-# ###################################
-
 # if __name__ == "__main__":
 #     data_folder = "/Users/karinpitlik/Desktop/DataScience/Thesis/Case1_Nov_2022_23_25/Ens/Graphs/UNITED/4by4/3_hours/jpeg"
 #     data_map = organize_lightning_data(data_folder)
@@ -532,50 +398,3 @@ if __name__ == "__main__":
 
 #     # ויזואליזציה של תוצאה אחת
 #     visualize_prediction(net, dataset, device, idx=0)
-
-# import os
-# import netCDF4 as nc
-# import torch
-# import numpy as np
-
-
-# def load_nc_layer(file_path, variable_name):
-#     ds = nc.Dataset(file_path)
-
-#     # חיפוש המשתנה ללא חשיבות לאותיות גדולות/קטנות
-#     target_var = None
-#     for var in ds.variables.keys():
-#         if var.lower() == variable_name.lower():
-#             target_var = var
-#             break
-
-#     if target_var is None:
-#         raise ValueError(
-#             f"Variable '{variable_name}' not found in {file_path}. "
-#             f"Available: {list(ds.variables.keys())}"
-#         )
-
-#     # טעינת הנתונים
-#     data = ds.variables[target_var][:]
-
-#     # אם יש למשתנה מימד זמן (למשל 1, 256, 256), אנחנו רוצים רק את המטריצה הדו-ממדית
-#     if data.ndim == 3:
-#         data = data[0]  # לוקחים את הצעד הראשון בזמן
-
-#     ds.close()  # חשוב לסגור את הקובץ כדי לא להעמיס על הזיכרון
-#     return torch.from_numpy(np.array(data).astype(np.float32))
-
-
-# if __name__ == "__main__":
-#     case_name = "Case1_Nov_2022_23_25"
-#     atm_params = ["KI"]
-#     # atm_params = ["KI", "CAPE2D", "LPI", "PREC_RATE"]
-
-#     main_folder = f"/Users/karinpitlik/Desktop/DataScience/Thesis/{case_name}/Ens/Raw"
-#     for param in atm_params:
-#         data_folder = f"{main_folder}/{param}"
-#         folder_files = os.listdir(data_folder)
-#         for file in folder_files:
-#             if ".DS_Store" not in file and "proccesed" not in file:
-#                 file_path = f"{data_folder}/{file}"
-#                 file_torch = load_nc_layer(file_path, param)
