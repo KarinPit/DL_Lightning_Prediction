@@ -108,13 +108,16 @@ def visualize_prediction(model, dataset, device, idx=0):
         plt.show()
 
 
-def train_model(model, train_loader, optimizer, criterion, num_epochs, device):
-    train_losses = []
-    train_f1s = []
+def train_model(
+    model, train_loader, val_loader, optimizer, criterion, num_epochs, device, save_path
+):
+    train_losses, val_losses = [], []
+    train_f1s, val_f1s = [], []
+    best_val_f1 = 0.0
 
     for epoch in range(1, num_epochs + 1):
         model.train()
-        total_loss, total_f1 = 0.0, 0.0
+        total_train_loss, total_train_f1 = 0.0, 0.0
 
         print(f"Starting Epoch {epoch}...")
 
@@ -127,17 +130,47 @@ def train_model(model, train_loader, optimizer, criterion, num_epochs, device):
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item() * xb.size(0)
-            total_f1 += calculate_f1(logits, yb) * xb.size(0)
+            total_train_loss += loss.item() * xb.size(0)
+            total_train_f1 += calculate_f1(logits, yb) * xb.size(0)
 
-        avg_loss = total_loss / len(train_loader.dataset)
-        avg_f1 = total_f1 / len(train_loader.dataset)
+        # --- 2. שלב הבדיקה (Validation) ---
+        model.eval()  # מעביר את המודל למצב הערכה (מכבה BatchNorm/Dropout)
+        total_val_loss, total_val_f1 = 0.0, 0.0
 
-        train_losses.append(avg_loss)
-        train_f1s.append(avg_f1)
-        print(f"Epoch {epoch:02d} | Loss: {avg_loss:.4f} | F1 (Accuracy): {avg_f1:.4f}")
+        with torch.no_grad():  # חוסך זיכרון ולא מחשב נגזרות
+            for xb, yb in val_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                logits = model(xb)
+                v_loss = criterion(logits, yb)
 
-    return train_losses, train_f1s
+                total_val_loss += v_loss.item() * xb.size(0)
+                total_val_f1 += calculate_f1(logits, yb) * xb.size(0)
+
+        # חישוב ממוצעים
+        avg_train_loss = total_train_loss / len(train_loader.dataset)
+        avg_val_loss = total_val_loss / len(val_loader.dataset)
+        avg_train_f1 = total_train_f1 / len(train_loader.dataset)
+        avg_val_f1 = total_val_f1 / len(val_loader.dataset)
+
+        train_losses.append(avg_train_loss)
+        val_losses.append(avg_val_loss)
+        train_f1s.append(avg_train_f1)
+        val_f1s.append(avg_val_f1)
+
+        print(
+            f"Epoch {epoch:02d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}"
+        )
+        print(f"         | Train F1: {avg_train_f1:.4f} | Val F1: {avg_val_f1:.4f}")
+
+        # --- 3. מנגנון השמירה שלך (מבוסס שיפור ב-Validation) ---
+        if avg_val_f1 > best_val_f1:
+            best_val_f1 = avg_val_f1
+            torch.save(
+                model.state_dict(), os.path.join(save_path, "best_lightning_model.pth")
+            )
+            print(f"🏆 Saved new best model based on Validation F1: {best_val_f1:.4f}")
+
+    return train_losses, train_f1s, val_losses, val_f1s
 
 
 def visualize_prediction(model, dataset, device, idx=0):
@@ -311,6 +344,7 @@ if __name__ == "__main__":
     tensor_save_path = (
         f"/Users/karinpitlik/Desktop/DataScience/Thesis/{case_name}/Ens/Tensors"
     )
+    best_model_path = os.path.join(tensor_save_path, "best_lightning_model.pth")
 
     tensors_exist = False
     if os.path.exists(tensor_save_path):
@@ -329,7 +363,7 @@ if __name__ == "__main__":
             channel_min = X[:, c, :, :].min()
             channel_max = X[:, c, :, :].max()
             X[:, c, :, :] = (X[:, c, :, :] - channel_min) / (
-                channel_max - channel_min + 1e-8
+                channel_max - channel_min + 1e-6
             )
 
         print("Normalization complete. All values are between 0 and 1.")
@@ -359,27 +393,66 @@ if __name__ == "__main__":
 
         # alpha=0.95 אומר שאנחנו נותנים משקל גבוה מאוד למחלקה החיובית (ברקים)
         # gamma=2 אומר שאנחנו "משתיקים" חזק פיקסלים שהמודל כבר בטוח בהם
-        criterion = FocalLoss(alpha=0.95, gamma=2)
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        # criterion = FocalLoss(alpha=0.95, gamma=2)
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
 
-        num_epochs = 20
-        train_losses, train_f1s = train_model(
-            model, train_loader, optimizer, criterion, num_epochs, device
+        best_model_exist = False
+        if os.path.exists(best_model_path):
+            print(f"Found existing model at {best_model_path}. Loading weights...")
+            model.load_state_dict(torch.load(best_model_path, map_location=device))
+            print("Model loaded successfully! You are starting from your best point.")
+
+        else:
+            print("No saved model found. Starting training from scratch.")
+
+        num_epochs = 10
+        train_losses, train_f1s, val_losses, val_f1s = train_model(
+            model,
+            train_loader,
+            val_loader,
+            optimizer,
+            criterion,
+            num_epochs,
+            device,
+            tensor_save_path,
         )
 
-        plt.figure(figsize=(12, 5))
+        # גרף ה-Loss
+        plt.figure(figsize=(15, 6))
         plt.subplot(1, 2, 1)
-        plt.plot(train_losses)
-        plt.title("Loss")
+        plt.plot(train_losses, label="Train Loss", color="blue", linestyle="--")
+        plt.plot(val_losses, label="Val Loss", color="red")
+        plt.title("Loss Convergence")
+        plt.xlabel("Epochs")
+        plt.ylabel("Loss Value")
+        plt.legend()
+        plt.grid(True)
+
+        # גרף ה-F1 Score
         plt.subplot(1, 2, 2)
-        plt.plot(train_f1s)
-        plt.title("F1-Score (Similarity)")
+        plt.plot(train_f1s, label="Train F1", color="blue", linestyle="--")
+        plt.plot(val_f1s, label="Val F1", color="red")
+        plt.title("F1-Score (Accuracy) Comparison")
+        plt.xlabel("Epochs")
+        plt.ylabel("F1 Score")
+        plt.legend()
+        plt.grid(True)
+
+        plt.tight_layout()
         plt.show()
 
-        # נבחר דגימה אקראית מתוך ה-Validation set
-        # עדיף לבדוק כמה אינדקסים (למשל 0, 10, 50) כדי לראות מקרים שונים
-        print("Visualizing results...")
-        for i in [0, 10, 20]:
+        print("Visualizing results from both datasets...")
+
+        # רשימת אינדקסים לבדיקה
+        indices_to_check = [0, 10, 20]
+
+        print("\n--- Samples from TRAINING Dataset ---")
+        for i in indices_to_check:
+            visualize_prediction(model, train_dataset, device, idx=i)
+
+        print("\n--- Samples from VALIDATION Dataset ---")
+        for i in indices_to_check:
             visualize_prediction(model, val_dataset, device, idx=i)
 
     else:
