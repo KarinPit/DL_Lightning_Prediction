@@ -226,40 +226,13 @@ class Up(nn.Module):
     def forward(self, x1, x2):
         x1 = self.up(x1)
 
-        # --- התיקון כאן: חישוב הפרשי הגדלים ---
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
 
-        # הוספת Padding אם חסר פיקסל (משמאל, מימין, מלמעלה, מלמטה)
+        # if a pixel is missing (creating a size mismatch) - fix by padding
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
-
-        # עכשיו הגדלים זהים ואפשר לחבר!
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
-
-
-class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.8, gamma=2, reduction="mean"):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
-
-    def forward(self, inputs, targets):
-        # inputs הם ה-logits מהמודל
-        # targets הם ה-labels (0 או 1)
-
-        ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
-        pt = torch.exp(-ce_loss)  # pt זו ההסתברות שהמודל צדק
-
-        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
-
-        if self.reduction == "mean":
-            return focal_loss.mean()
-        elif self.reduction == "sum":
-            return focal_loss.sum()
-        else:
-            return focal_loss
 
 
 class UNet(nn.Module):
@@ -268,20 +241,20 @@ class UNet(nn.Module):
         self.n_channels = n_channels
         self.n_classes = n_classes
 
-        # Encoder (הצד היורד)
+        # Encoder (Down scalling)
         self.inc = DoubleConv(n_channels, 64)
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
         self.down4 = Down(512, 1024)  # Bottleneck
 
-        # Decoder (הצד העולה)
+        # Decoder (Up scalling)
         self.up1 = Up(1024, 512)
         self.up2 = Up(512, 256)
         self.up3 = Up(256, 128)
         self.up4 = Up(128, 64)
 
-        # שכבת פלט - מוציאה ערוץ 1 (ENTLN)
+        # output layer
         self.outc = nn.Conv2d(64, n_classes, kernel_size=1)
 
     def forward(self, x):
@@ -292,7 +265,7 @@ class UNet(nn.Module):
         x4 = self.down3(x3)
         x5 = self.down4(x4)
 
-        # Decoder path עם Skip Connections
+        # Decoder path with Skip Connections
         x = self.up1(x5, x4)
         x = self.up2(x, x3)
         x = self.up3(x, x2)
