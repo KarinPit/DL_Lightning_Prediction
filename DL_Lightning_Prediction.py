@@ -11,7 +11,9 @@ from torch.utils.data import TensorDataset, DataLoader, random_split
 import torch.nn.functional as F
 
 
-# Data proccessing functions
+############ Data proccessing functions ############
+
+
 def extract_timestamp(filename, is_entln=False):
     """Extracts the date and time from the filename of the raw files"""
 
@@ -21,9 +23,10 @@ def extract_timestamp(filename, is_entln=False):
             filename,
         )
         if match:
-            # matches format of the entln date and time to the atm parameters date and time format
+            # extracts the date and time if exists in the file name
             ts = match.group(1)
             dt = datetime.strptime(ts, "%Y-%m-%d_%H_%M_%S")
+            # make sure the time is rounded
             dt_rounded = dt.replace(second=0, microsecond=0)
             minute = (dt_rounded.minute // 10) * 10
             dt_rounded = dt_rounded.replace(minute=minute)
@@ -33,7 +36,8 @@ def extract_timestamp(filename, is_entln=False):
             r"(\d{4}-\d{2}-\d{2})_(\d{2})[\/:](\d{2})[\/:](\d{2})", filename
         )
         if match:
-            return f"{match.group(1)}_{match.group(2)}/{match.group(3)}/00"  # מאפסים שניות ליתר ביטחון
+            # extracts the date and time if exists in the file name
+            return f"{match.group(1)}_{match.group(2)}/{match.group(3)}/00"
 
     return None
 
@@ -45,10 +49,12 @@ def load_nc_layer(file_path, variable_name):
         (var for var in ds.variables if var.lower() == variable_name.lower()), None
     )
 
+    # if variable name is not found, the ds is closed
     if target_var is None:
         ds.close()
         return None
 
+    # make sure the data is 3 dimensional (variable, lat, long) and extract the vars's data
     data = ds.variables[target_var][:]
     if data.ndim == 3:
         data = data[0]
@@ -59,11 +65,11 @@ def load_nc_layer(file_path, variable_name):
     return tensor
 
 
-# Deep learning functions
+############ Deep learning functions ############
 
 
-def calculate_f1(logits, targets, threshold=0.1):
-    """מחשב כמה המפה שהמודל יצר דומה למפת האמת"""
+def calculate_f1(logits, targets, threshold=0.5):
+    """Calculates the f1 scores of the model's map to see how similar it is to the ground truth map"""
     probs = torch.sigmoid(logits)
     preds = (probs > threshold).float()
 
@@ -79,7 +85,9 @@ def calculate_f1(logits, targets, threshold=0.1):
 
 
 def visualize_prediction(model, dataset, device, idx=0):
-    """מציג השוואה בין הקלט, החיזוי והאמת"""
+    """Creates a 3 subplot plot where the left map is a variable's values,
+    and the right is the ground truth map
+    """
     model.eval()
     with torch.no_grad():
         x, y_true = dataset[idx]
@@ -89,21 +97,17 @@ def visualize_prediction(model, dataset, device, idx=0):
         y_pred = torch.sigmoid(logits).cpu().squeeze().numpy()
         y_true = y_true.squeeze().numpy()
 
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        fig, axes = plt.subplots(1, 2, figsize=(18, 5))
 
-        # מציגים שכבה אחת מהקלט (למשל CAPE - ערוץ 3)
-        axes[0].imshow(x[3].numpy(), cmap="jet")
-        axes[0].set_title("Input (CAPE)")
+        # model's prediction
+        im1 = axes[0].imshow(y_pred, cmap="magma")
+        axes[0].set_title("Model Prediction")
+        plt.colorbar(im1, ax=axes[0])
 
-        # החיזוי של המודל
-        im1 = axes[1].imshow(y_pred, cmap="magma")
-        axes[1].set_title("Model Prediction")
-        plt.colorbar(im1, ax=axes[1])
-
-        # האמת מהשטח
-        im2 = axes[2].imshow(y_true, cmap="magma")
-        axes[2].set_title("Ground Truth (ENTLN)")
-        plt.colorbar(im2, ax=axes[2])
+        # ground truth
+        im2 = axes[1].imshow(y_true, cmap="magma")
+        axes[1].set_title("Ground Truth (ENTLN)")
+        plt.colorbar(im2, ax=axes[1])
 
         plt.show()
 
@@ -111,6 +115,7 @@ def visualize_prediction(model, dataset, device, idx=0):
 def train_model(
     model, train_loader, val_loader, optimizer, criterion, num_epochs, device, save_path
 ):
+    """Train the U-Net model"""
     train_losses, val_losses = [], []
     train_f1s, val_f1s = [], []
     best_val_f1 = 0.0
@@ -121,6 +126,7 @@ def train_model(
 
         print(f"Starting Epoch {epoch}...")
 
+        # model training- perform backprop and loss calculation
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
 
@@ -133,11 +139,11 @@ def train_model(
             total_train_loss += loss.item() * xb.size(0)
             total_train_f1 += calculate_f1(logits, yb) * xb.size(0)
 
-        # --- 2. שלב הבדיקה (Validation) ---
-        model.eval()  # מעביר את המודל למצב הערכה (מכבה BatchNorm/Dropout)
+        # model evaluation- calculate loss on the validation set
+        model.eval()
         total_val_loss, total_val_f1 = 0.0, 0.0
 
-        with torch.no_grad():  # חוסך זיכרון ולא מחשב נגזרות
+        with torch.no_grad():
             for xb, yb in val_loader:
                 xb, yb = xb.to(device), yb.to(device)
                 logits = model(xb)
@@ -146,7 +152,7 @@ def train_model(
                 total_val_loss += v_loss.item() * xb.size(0)
                 total_val_f1 += calculate_f1(logits, yb) * xb.size(0)
 
-        # חישוב ממוצעים
+        # calculate average loss and f1 scores
         avg_train_loss = total_train_loss / len(train_loader.dataset)
         avg_val_loss = total_val_loss / len(val_loader.dataset)
         avg_train_f1 = total_train_f1 / len(train_loader.dataset)
@@ -162,56 +168,18 @@ def train_model(
         )
         print(f"         | Train F1: {avg_train_f1:.4f} | Val F1: {avg_val_f1:.4f}")
 
-        # --- 3. מנגנון השמירה שלך (מבוסס שיפור ב-Validation) ---
+        # save the best model's weights to a file for future use
         if avg_val_f1 > best_val_f1:
             best_val_f1 = avg_val_f1
             torch.save(
                 model.state_dict(), os.path.join(save_path, "best_lightning_model.pth")
             )
-            print(f"🏆 Saved new best model based on Validation F1: {best_val_f1:.4f}")
+            print(f"(!) Saved new best model based on Validation F1: {best_val_f1:.4f}")
 
     return train_losses, train_f1s, val_losses, val_f1s
 
 
-def visualize_prediction(model, dataset, device, idx=0):
-    """מציג השוואה בין הקלט, מפת ההסתברויות והאמת מהשטח"""
-    model.eval()
-    with torch.no_grad():
-        x, y_true = dataset[idx]
-        # מוסיפים מימד Batch ושולחים ל-MPS
-        x_in = x.unsqueeze(0).to(device)
-
-        # הרצת המודל
-        logits = model(x_in)
-        # הפיכה להסתברות (0 עד 1)
-        probs = torch.sigmoid(logits).cpu().squeeze().numpy()
-        y_true = y_true.squeeze().numpy()
-
-        fig, axes = plt.subplots(1, 3, figsize=(20, 6))
-
-        # 1. הצגת קלט (למשל LPI או CAPE)
-        # נבחר להציג את ה-LPI (ערוץ 2) כי הוא לרוב הכי קשור לברקים
-        im0 = axes[0].imshow(x[2].numpy(), cmap="viridis")
-        axes[0].set_title(f"Input Feature (LPI) - Sample {idx}")
-        plt.colorbar(im0, ax=axes[0])
-
-        # 2. מפת ההסתברויות (החיזוי של המודל)
-        # נשתמש ב-vmin/vmax כדי לוודא שהסקלה היא תמיד 0 עד 1
-        im1 = axes[1].imshow(probs, cmap="hot", vmin=0, vmax=1)
-        axes[1].set_title("Predicted Probability (0-1)")
-        plt.colorbar(im1, ax=axes[1])
-
-        # 3. האמת מהשטח (ENTLN)
-        im2 = axes[2].imshow(y_true, cmap="gray")
-        axes[2].set_title("Ground Truth (Actual Lightning)")
-        axes[2].imshow(y_true, cmap="gray", vmin=0, vmax=1)
-        plt.colorbar(im2, ax=axes[2])
-
-        plt.tight_layout()
-        plt.show()
-
-
-# Deep Learning Classes
+############ Deep Learning Classes ############
 
 
 class DoubleConv(nn.Module):
@@ -335,10 +303,13 @@ class UNet(nn.Module):
 
 
 if __name__ == "__main__":
-    case_name = "Case1_Nov_2022_23_25"
+    # available cases and atm params
+    available_cases = ["Case1_Nov_2022_23_25", "Case2_Jan_2023_11_16"]
+    case_name = available_cases[1]
     atm_params = ["KI", "CAPE2D", "LPI", "PREC_RATE"]
     resolution = "4by4"
 
+    # data and output paths
     main_folder = f"/Users/karinpitlik/Desktop/DataScience/Thesis/{case_name}/Ens/Raw"
     entln_folder = f"/Users/karinpitlik/Desktop/DataScience/Thesis/ENTLN/ENTLN_pulse_{case_name}/{resolution}/10_minutes/"
     tensor_save_path = (
@@ -346,6 +317,7 @@ if __name__ == "__main__":
     )
     best_model_path = os.path.join(tensor_save_path, "best_lightning_model.pth")
 
+    # check if case tensors exist
     tensors_exist = False
     if os.path.exists(tensor_save_path):
         files = os.listdir(tensor_save_path)
@@ -358,7 +330,7 @@ if __name__ == "__main__":
         X = torch.load(os.path.join(tensor_save_path, "X_final_2880.pt"))
         y = torch.load(os.path.join(tensor_save_path, "Y_final_2880.pt"))
 
-        # נרמול גלובלי לכל ערוץ (4 ערוצים)
+        # perform a min-max normalization on the X data so it will contain only 0 to 1 values
         for c in range(X.shape[1]):
             channel_min = X[:, c, :, :].min()
             channel_max = X[:, c, :, :].max()
@@ -366,37 +338,25 @@ if __name__ == "__main__":
                 channel_max - channel_min + 1e-6
             )
 
-        print("Normalization complete. All values are between 0 and 1.")
-
+        # create tensor dataset and split to training and validation sets
         full_dataset = TensorDataset(X, y)
 
         train_size = int(0.8 * len(full_dataset))
         val_size = len(full_dataset) - train_size
 
         train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
-        # train_dataset, val_dataset = random_split(
-        #     full_dataset, [100, len(full_dataset) - 100]
-        # )  # Run model on smaller portion of the data to make sure it runs correctly
-
         train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False)
 
+        # model configuration
         device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-        print(f"Using device: {device}")
-
         model = UNet(n_channels=4, n_classes=1).to(device)
-
-        # נניח שרק 0.1% מהפיקסלים הם ברקים, ניתן להם משקל של פי 100
+        # lightning occurences have large weight
         pos_weight = torch.tensor([5000.0]).to(device)
-        # criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-        # criterion = nn.BCEWithLogitsLoss()
-
-        # alpha=0.95 אומר שאנחנו נותנים משקל גבוה מאוד למחלקה החיובית (ברקים)
-        # gamma=2 אומר שאנחנו "משתיקים" חזק פיקסלים שהמודל כבר בטוח בהם
-        # criterion = FocalLoss(alpha=0.95, gamma=2)
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)
 
+        # check if previous model weights exist, if not training will start from scratch
         best_model_exist = False
         if os.path.exists(best_model_path):
             print(f"Found existing model at {best_model_path}. Loading weights...")
@@ -406,6 +366,7 @@ if __name__ == "__main__":
         else:
             print("No saved model found. Starting training from scratch.")
 
+        # start training loop
         num_epochs = 10
         train_losses, train_f1s, val_losses, val_f1s = train_model(
             model,
@@ -418,7 +379,7 @@ if __name__ == "__main__":
             tensor_save_path,
         )
 
-        # גרף ה-Loss
+        # loss graph
         plt.figure(figsize=(15, 6))
         plt.subplot(1, 2, 1)
         plt.plot(train_losses, label="Train Loss", color="blue", linestyle="--")
@@ -429,7 +390,7 @@ if __name__ == "__main__":
         plt.legend()
         plt.grid(True)
 
-        # גרף ה-F1 Score
+        # f1 graph
         plt.subplot(1, 2, 2)
         plt.plot(train_f1s, label="Train F1", color="blue", linestyle="--")
         plt.plot(val_f1s, label="Val F1", color="red")
@@ -444,21 +405,18 @@ if __name__ == "__main__":
 
         print("Visualizing results from both datasets...")
 
-        # רשימת אינדקסים לבדיקה
+        # visualize random slices from the model and the ground truth
         indices_to_check = [0, 10, 20]
 
-        print("\n--- Samples from TRAINING Dataset ---")
         for i in indices_to_check:
             visualize_prediction(model, train_dataset, device, idx=i)
 
-        print("\n--- Samples from VALIDATION Dataset ---")
         for i in indices_to_check:
             visualize_prediction(model, val_dataset, device, idx=i)
 
     else:
-        all_keys_sets = (
-            []
-        )  # This will store all the available timestamps for later intersection
+        # This will store all the available timestamps for later intersection
+        all_keys_sets = []
 
         # Loop over the files in the ENTLN folder and extract all existing timestamps
         entln_map = {}
@@ -481,6 +439,7 @@ if __name__ == "__main__":
             param_maps[param] = {}
             current_param_times = set()
 
+            # go through all the atm param's files and extract the timestamp (ts)
             for file in os.listdir(data_folder):
                 if file.endswith(".nc"):
                     ts = extract_timestamp(file)
@@ -488,25 +447,25 @@ if __name__ == "__main__":
                         ens_match = re.search(r"_(\d{1,2})_", file)
                         ens_id = f"{int(ens_match.group(1)):02d}" if ens_match else "00"
 
-                        # Each timestamp has a number of ensemble ids! so the ensemble id is also part of the key (to avoid ts overide previous ens ts)
+                        # Each timestamp has a few ensemble ids! so the ensemble id is also part of the key (to avoid ts over writing previous tss)
                         combined_key = f"{ens_id}_{ts}"
                         param_maps[param][combined_key] = file
                         current_param_times.add(ts)
 
             all_param_times.append(current_param_times)
 
-        # Intersection of the ts in the ENTLN ts set and the atm parameter ts set
+        # Intersection of the ts in the ENTLN set and the ts of the atm parameter set
         all_keys_sets = all_param_times + [set(entln_map.keys())]
         common_timestamps = set.intersection(*all_keys_sets)
         print(f"Found {len(common_timestamps)} common timestamps.")
 
-        # List of available ens ids
+        # List of available ensemble ids
         ens_list = [f"{i:02d}" for i in range(11)]
 
         all_x_samples = []
         all_y_samples = []
 
-        # This loop goes over all available timestamps and converts the .nc files to tensors
+        # This loop goes over all available timestamps, convert the .nc file to a tensor, and append the tensor to the x or y list
         for ts in sorted(common_timestamps):
             for ens_id in ens_list:
                 combined_key = f"{ens_id}_{ts}"
@@ -539,7 +498,7 @@ if __name__ == "__main__":
 
         print(f"Total X samples: {len(all_x_samples)}")
 
-        # Unite the tensors in the lists to: X_tensor shape- [2880, 4, 249, 249] , y_tensor shape- [2880, 1, 249, 249]
+        # Unite the tensors in the lists to one tensor: X_tensor shape- [2880, 4, 249, 249] , y_tensor shape- [2880, 1, 249, 249]
         if len(all_x_samples) > 0:
             final_x_tensor = torch.stack(all_x_samples, dim=0)
             final_y_tensor = torch.stack(all_y_samples, dim=0)
@@ -547,9 +506,6 @@ if __name__ == "__main__":
             print("-" * 30)
             print(f"Final X shape: {final_x_tensor.shape}")
             print(f"Final Y shape: {final_y_tensor.shape}")
-            print(
-                f"Total memory: {final_x_tensor.element_size() * final_x_tensor.nelement() / 1e6:.2f} MB"
-            )
 
             # Save tensors to disk to avoid memory usage
             if not os.path.exists(tensor_save_path):
