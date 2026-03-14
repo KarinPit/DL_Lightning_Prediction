@@ -183,7 +183,7 @@ def train_model(
 
 
 class DoubleConv(nn.Module):
-    """(convolution => [BN] => ReLU) * 2"""
+    """(convolution => Batch normalization => ReLU) * 2"""
 
     def __init__(self, in_channels, out_channels):
         super().__init__()
@@ -236,19 +236,19 @@ class Up(nn.Module):
 
 
 class UNet(nn.Module):
-    def __init__(self, n_channels=4, n_classes=1):
+    def __init__(self, n_channels=1, n_classes=1):
         super(UNet, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
 
-        # Encoder (Down scalling)
+        # Encoder (Down sampling)
         self.inc = DoubleConv(n_channels, 64)
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
         self.down4 = Down(512, 1024)  # Bottleneck
 
-        # Decoder (Up scalling)
+        # Decoder (Up sampling)
         self.up1 = Up(1024, 512)
         self.up2 = Up(512, 256)
         self.up3 = Up(256, 128)
@@ -278,7 +278,7 @@ class UNet(nn.Module):
 if __name__ == "__main__":
     # available cases and atm params
     available_cases = ["Case1_Nov_2022_23_25", "Case2_Jan_2023_11_16"]
-    case_name = available_cases[1]
+    case_name = available_cases[0]
     atm_params = ["KI", "CAPE2D", "LPI", "PREC_RATE"]
     resolution = "4by4"
 
