@@ -5,3 +5,10 @@ scikit-learn
 xarray
 matplotlib
 pyyaml
+protobuf
+dask
+cartopy
+geopandas
+netCDF4
+tqdm
+torch

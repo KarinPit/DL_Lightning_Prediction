@@ -15,12 +15,28 @@ from tensorflow.keras.layers import Dropout, BatchNormalization
 from tensorflow.keras.metrics import MeanSquaredError, AUC
 from tensorflow.keras.regularizers import L2
 import xarray
-from ml_functions import get_argparser, get_features, get_optimizer, load_df, rptdist2bool, get_savedmodel_path
+from ml_functions import (
+    get_argparser,
+    get_features,
+    get_optimizer,
+    load_df,
+    rptdist2bool,
+    get_savedmodel_path,
+)
 import visualizecv  # custom script by ahijevyc modified from sklearn web page
 
 
-def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], kernel_regularizer=None,
-                   optimizer_name='Adam', dropout=0, batch_normalize=False, learning_rate=0.01):
+def baseline_model(
+    input_dim=None,
+    name=None,
+    numclasses=None,
+    neurons=[16, 16],
+    kernel_regularizer=None,
+    optimizer_name="Adam",
+    dropout=0,
+    batch_normalize=False,
+    learning_rate=0.01,
+):
 
     # Discard any pre-existing version of the model.
     model = tf.keras.models.Sequential(name=name)
@@ -28,56 +44,67 @@ def baseline_model(input_dim=None, name=None, numclasses=None, neurons=[16,16], 
     model.add(tf.keras.Input(shape=input_dim))
     # add dropout, batch normalization, and kernel regularization, even with only one layer.
     for n in neurons:
-        model.add(tf.keras.layers.Dense(n, activation='relu',
-                  kernel_regularizer=kernel_regularizer))
+        model.add(
+            tf.keras.layers.Dense(
+                n, activation="relu", kernel_regularizer=kernel_regularizer
+            )
+        )
         model.add(Dropout(rate=dropout))
         if batch_normalize:
             model.add(BatchNormalization())
     # used softmax in HWT_mode to add to 1
-    model.add(tf.keras.layers.Dense(numclasses, activation='sigmoid'))
+    model.add(tf.keras.layers.Dense(numclasses, activation="sigmoid"))
 
     # Compile model with optimizer and loss function. MSE is same as brier_score.
     loss = "binary_crossentropy"  # in HWT_mode, I used categorical_crossentropy
     optimizer = get_optimizer(optimizer_name, learning_rate=learning_rate)
-    model.compile(loss=loss, optimizer=optimizer, run_eagerly=None, metrics=[
-        MeanSquaredError(), AUC(), "accuracy"])
+    model.compile(
+        loss=loss,
+        optimizer=optimizer,
+        run_eagerly=None,
+        metrics=[MeanSquaredError(), AUC(), "accuracy"],
+    )
 
     return model
 
 
-logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
+logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.INFO)
 
 
 def main():
-
-    parser = get_argparser()
-
-    args = parser.parse_args()
-    logging.info(args)
-
     # Assign arguments to simple-named variables
-    batchnorm = args.batchnorm
-    batchsize = args.batchsize
-    clobber = args.clobber
-    debug = args.debug
-    dropout = args.dropout
-    epochs = args.epochs
-    fhr = args.fhr
-    fits = args.fits
-    folds = args.folds
-    kfold = args.kfold
-    label_cols = args.labels
-    learning_rate = args.learning_rate
-    neurons = args.neurons
-    nfit = args.nfits
-    optimizer_name = args.optimizer
-    reg_penalty = args.reg_penalty  # L2
-    seed = args.seed
-    testend = args.testend
-    teststart = args.teststart
-    trainend = args.trainend
-    trainstart = args.trainstart
-    suite = args.suite
+    batchnorm = False
+    batchsize = 1024
+    clobber = False
+    debug = False
+    dropout = 0.0
+    epochs = 30
+    labels = []
+    fhr = list(range(1, 49))
+    fits = None
+    flash = 10
+    folds = None
+    kfold = 5
+    idate = None
+    ifile = None
+    learning_rate = 0.001
+    model = "HRRR"
+    neurons = [16, 16]
+    nfits = 10
+    nprocs = 0
+    optimizer_name = "Adam"
+    reg_penalty = 0.01
+    savedmodel = None
+    seed = None
+
+    trainstart = pd.to_datetime("19700101")
+    trainend = pd.to_datetime("20220101")
+
+    teststart = pd.to_datetime("20210101")
+    testend = pd.to_datetime("20220101")
+
+    twin = 2
+    suite = "default"
 
     if debug:
         logging.basicConfig(level=logging.DEBUG)
@@ -98,15 +125,9 @@ def main():
             # Exit if requested training and test period overlap and kfold == 1.
             sys.exit(1)
 
-    ### saved model name ###
-    savedmodel = get_savedmodel_path(args)
-    logging.info(f"savedmodel={savedmodel}")
+    ###################################
 
-    ##################################
-
-
-    df = load_df(args)
-
+    
     # Convert distance to closest storm report to True/False based on distance and time thresholds
     # And convert flash count to True/False based on distance, time, and flash thresholds
     df = rptdist2bool(df, args)
@@ -146,7 +167,7 @@ def main():
     logging.info(f"dropped {set(before_filtering) - set(df.columns)}")
     logging.info(f"kept {len(df.columns)}/{len(before_filtering)} features")
 
-    logging.info(f"calculating mean and standard dev scaling values")
+    # logging.info(f"calculating mean and standard dev scaling values")
     sv = df.describe()
 
     # Check for zero standard deviation. (can't normalize)
@@ -191,9 +212,9 @@ def main():
             else:
                 logging.info(f"fitting {model_i}")
                 model = baseline_model(input_dim=df.columns.size, numclasses=labels.columns.size, neurons=neurons, name=f"fit_{i}",
-                                       kernel_regularizer=L2(l2=reg_penalty), optimizer_name=optimizer_name, dropout=dropout, 
+                                       kernel_regularizer=L2(l2=reg_penalty), optimizer_name=optimizer_name, dropout=dropout,
                                        learning_rate=learning_rate)
-                model.fit(df.iloc[train_split].to_numpy(dtype='float32'), labels.iloc[train_split].to_numpy(dtype='float32'), 
+                model.fit(df.iloc[train_split].to_numpy(dtype='float32'), labels.iloc[train_split].to_numpy(dtype='float32'),
                         class_weight=None, sample_weight=None, batch_size=batchsize, epochs=epochs, verbose=2)
                 logging.info(f"saving {model_i}")
                 model.save(model_i)
