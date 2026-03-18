@@ -172,6 +172,117 @@ class UNet(nn.Module):
         return logits
 
 
+######### Deep learning functions #########
+
+
+def calc_csi(binary_preds, true_y):
+    """Critical Success Index (CSI)"""
+    true_pos = np.sum((binary_preds == 1) & (true_y == 1))
+    false_neg = np.sum((binary_preds == 0) & (true_y == 1))
+    false_pos = np.sum((binary_preds == 1) & (true_y == 0))
+
+    denominator = true_pos + false_neg + false_pos
+    if denominator == 0:
+        return np.nan
+
+    return true_pos / denominator
+
+
+def calc_far(binary_preds, true_y):
+    """False Alarm Ratio (FAR)"""
+    true_pos = np.sum((binary_preds == 1) & (true_y == 1))
+    false_pos = np.sum((binary_preds == 1) & (true_y == 0))
+
+    denominator = true_pos + false_pos
+    if denominator == 0:
+        return np.nan
+
+    return false_pos / denominator
+
+
+def calc_pod(binary_preds, true_y):
+    """Probability Of Detection (POD)"""
+    true_pos = np.sum((binary_preds == 1) & (true_y == 1))
+    false_neg = np.sum((binary_preds == 0) & (true_y == 1))
+
+    denominator = true_pos + false_neg
+    if denominator == 0:
+        return np.nan
+
+    return true_pos / denominator
+
+
+def calc_bs(pred_probs, true_y):
+    """Brier Score (BS)"""
+    return np.mean((pred_probs - true_y) ** 2)
+
+
+def calc_bss(pred_probs, true_y):
+    """Brier Skill Score (BSS) relative to climatology"""
+    bs = calc_bs(pred_probs, true_y)
+
+    climatology = np.mean(true_y)
+    bs_ref = np.mean((climatology - true_y) ** 2)
+
+    if bs_ref == 0:
+        return np.nan
+
+    return 1 - (bs / bs_ref)
+
+
+def train_model(
+    model,
+    train_loader,
+    val_loader,
+    optimizer,
+    criterion,
+    num_epochs,
+    device,
+    descision_threshold,
+    save_path,
+):
+    """Train the U-Net model"""
+    train_losses, val_losses = [], []
+
+    for epoch in range(1, num_epochs + 1):
+        model.train()
+        total_train_loss = 0.0
+
+        print(f"Starting Epoch {epoch}...")
+
+        # go through all x and y pairs in the current batch
+        for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+
+            # perform backprop on the loss and store the given loss
+            optimizer.zero_grad()
+            logits = model(xb)
+            loss = criterion(logits, yb)
+            loss.backward()
+            optimizer.step()
+            total_train_loss += loss.item() * xb.size(0)
+
+            # calculate contigency metrics
+            probs = torch.sigmoid(logits)
+            pred_binary = (probs > descision_threshold).int()
+
+        # model evaluation- calculate loss on the validation set
+        model.eval()
+        total_val_loss = 0.0
+
+        with torch.no_grad():
+            for xb, yb in val_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                logits = model(xb)
+                v_loss = criterion(logits, yb)
+
+                total_val_loss += v_loss.item() * xb.size(0)
+
+    return train_losses, val_losses
+
+
+# TODO- implement optimizer function (optional?)
+
 ##############################################
 
 
@@ -182,20 +293,35 @@ if __name__ == "__main__":
     space_res = "24by24"
     time_res = "1_hours"
 
-    # path configuration
+    # paths configuration
     wrf_path = f"{MAIN_PATH}/{case}/Ens/Raw/"
     entln_path = f"{MAIN_PATH}/{case}/ENTLN/{space_res}/{time_res}"
     tensor_path = f"{MAIN_PATH}/{case}/Ens/Tensors"
+
+    # DL model configuration
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = UNet(n_channels=4, n_classes=1).to(device)
+    pos_weight = torch.tensor([5000.0]).to(device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    num_epochs = 10
+    batch_size = 4
 
     # check if case tensors exist
     tensors_exist = False
     if os.path.exists(tensor_path):
         files = os.listdir(tensor_path)
-        if "X_final_2880.pt" in files and "Y_final_2880.pt" in files:
+        if "X_final.pt" in files and "Y_final.pt" in files:
             tensors_exist = True
 
     if tensors_exist:
-        pass
+        print("X and y tensors available. Skipping tensor creation and saving!")
+
+        X = torch.load(os.path.join(tensor_path, "X_final.pt"))
+        y = torch.load(os.path.join(tensor_path, "Y_final.pt"))
+
+        # TODO- implement mean and stdev normalization before training
+
     else:
         # This will store all the available timestamps for later intersection
         all_keys_sets = []
@@ -296,8 +422,8 @@ if __name__ == "__main__":
             if not os.path.exists(tensor_path):
                 os.makedirs(tensor_path)
 
-            torch.save(final_x_tensor, os.path.join(tensor_path, "X_final_2880.pt"))
-            torch.save(final_y_tensor, os.path.join(tensor_path, "Y_final_2880.pt"))
+            torch.save(final_x_tensor, os.path.join(tensor_path, "X_final.pt"))
+            torch.save(final_y_tensor, os.path.join(tensor_path, "Y_final.pt"))
         else:
             print(
                 "No samples were created. Check if timestamps match between Ens and ENTLN."
