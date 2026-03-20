@@ -6,7 +6,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch
-from torch.utils.data import TensorDataset, DataLoader, random_split
+from torch.utils.data import TensorDataset, Subset, random_split
 import torch.nn.functional as F
 from tqdm import tqdm
 
@@ -230,6 +230,19 @@ def calc_bss(pred_probs, true_y):
     return 1 - (bs / bs_ref)
 
 
+def mean_std_norm(train_X):
+    """calculate mean and standard deviation of a given train dataset"""
+    means = []
+    stds = []
+
+    for c in range(train_X.shape[1]):
+        mean = train_X[:, c, :, :].mean()
+        std = train_X[:, c, :, :].std()
+        means.append(mean)
+        stds.append(std)
+    return means, stds
+
+
 def train_model(
     model,
     train_loader,
@@ -320,7 +333,30 @@ if __name__ == "__main__":
         X = torch.load(os.path.join(tensor_path, "X_final.pt"))
         y = torch.load(os.path.join(tensor_path, "Y_final.pt"))
 
-        # TODO- implement mean and stdev normalization before training
+        # TODO- implement training and evaluation loop
+        # TODO- save the best model weights
+        # TODO- codex for VSCode?
+
+        # create tensor dataset and split to training and validation sets
+        train_size = int(0.8 * len(X))
+        val_size = len(X) - train_size
+
+        # split indices first
+        train_dataset, val_dataset = random_split(range(len(X)), [train_size, val_size])
+        train_idx = train_dataset.indices
+
+        # compute stats
+        train_X = X[train_idx]
+        means, stds = mean_std_norm(train_X)
+
+        # normalize
+        for c in range(X.shape[1]):
+            X[:, c, :, :] = (X[:, c, :, :] - means[c]) / (stds[c] + 1e-8)
+
+        # NOW create datasets
+        full_dataset = TensorDataset(X, y)
+        train_dataset = Subset(full_dataset, train_idx)
+        val_dataset = Subset(full_dataset, val_dataset.indices)
 
     else:
         # This will store all the available timestamps for later intersection
