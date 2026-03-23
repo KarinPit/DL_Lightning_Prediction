@@ -37,11 +37,12 @@ if __name__ == "__main__":
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     num_epochs = 10
-    batch_size = 4
-    decision_threshold = 0.03
+    batch_size = 50
+    decision_threshold = 0.9
 
     # check if case tensors exist
     tensors_exist = False
+
     if os.path.exists(tensor_path):
         files = os.listdir(tensor_path)
         if "X_final.pt" in files and "Y_final.pt" in files:

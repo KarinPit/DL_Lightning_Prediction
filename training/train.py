@@ -48,6 +48,7 @@ def evaluate_model(model, data_loader, criterion, device, decision_threshold=0.5
             xb = xb.to(device)
             yb = yb.to(device)
             xb, yb = _sanitize_batch(xb, yb)
+            yb = (yb > 0).float()
 
             logits = model(xb)
             loss = criterion(logits, yb)
@@ -71,11 +72,10 @@ def evaluate_model(model, data_loader, criterion, device, decision_threshold=0.5
             yb_np = yb.detach().cpu().numpy()
 
             # Make sure truth is binary for contingency metrics
-            yb_binary_np = (yb_np > 0.5).astype(np.int32)
 
-            csi_vals.append(calc_csi(binary_preds_np, yb_binary_np))
-            far_vals.append(calc_far(binary_preds_np, yb_binary_np))
-            pod_vals.append(calc_pod(binary_preds_np, yb_binary_np))
+            csi_vals.append(calc_csi(binary_preds_np, yb_np))
+            far_vals.append(calc_far(binary_preds_np, yb_np))
+            pod_vals.append(calc_pod(binary_preds_np, yb_np))
             bs_vals.append(calc_bs(probs_np, yb_np))
             bss_vals.append(calc_bss(probs_np, yb_np))
 
@@ -139,12 +139,13 @@ def train_model(
             xb = xb.to(device)
             yb = yb.to(device)
             xb, yb = _sanitize_batch(xb, yb)
+            yb = (yb > 0).float()
 
             optimizer.zero_grad()
 
             logits = model(xb)
             loss = criterion(logits, yb)
-            loss = _safe_loss(loss)
+            # loss = _safe_loss(loss)
             if loss is None:
                 continue
 
@@ -156,24 +157,22 @@ def train_model(
             total_train_samples += batch_size
 
             probs = torch.sigmoid(logits)
+            print(probs.min(), probs.max())
             binary_preds = (probs > decision_threshold).int()
 
             probs_np = probs.detach().cpu().numpy()
             binary_preds_np = binary_preds.detach().cpu().numpy()
             yb_np = yb.detach().cpu().numpy()
-            yb_binary_np = (yb_np > 0.5).astype(np.int32)
 
-            train_csi_vals.append(calc_csi(binary_preds_np, yb_binary_np))
-            train_far_vals.append(calc_far(binary_preds_np, yb_binary_np))
-            train_pod_vals.append(calc_pod(binary_preds_np, yb_binary_np))
+            train_csi_vals.append(calc_csi(binary_preds_np, yb_np))
+            train_far_vals.append(calc_far(binary_preds_np, yb_np))
+            train_pod_vals.append(calc_pod(binary_preds_np, yb_np))
             train_bs_vals.append(calc_bs(probs_np, yb_np))
             train_bss_vals.append(calc_bss(probs_np, yb_np))
 
         # Average training metrics over the epoch
         avg_train_loss = (
-            total_train_loss / total_train_samples
-            if total_train_samples > 0
-            else 0.0
+            total_train_loss / total_train_samples if total_train_samples > 0 else 0.0
         )
         avg_train_csi = _safe_mean(train_csi_vals)
         avg_train_far = _safe_mean(train_far_vals)
