@@ -1,6 +1,7 @@
 import os
 
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
@@ -127,6 +128,16 @@ def _apply_geo_axis_style(axis, min_lon, max_lon, min_lat, max_lat):
     )
     gridliner.top_labels = False
     gridliner.right_labels = False
+
+
+def _get_probability_colormap(probability_bounds=None, cmap_name="plasma"):
+    """Return a discrete colormap and norm for probability visualization."""
+    if probability_bounds is None:
+        probability_bounds = [0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
+
+    cmap = plt.get_cmap(cmap_name, len(probability_bounds) - 1)
+    norm = mcolors.BoundaryNorm(probability_bounds, cmap.N)
+    return probability_bounds, cmap, norm
 
 
 def plot_original_sample_maps(
@@ -336,6 +347,7 @@ def inspect_probability_maps(
     lightning_occurrence_index=0,
     channel_names=None,
     sample_metadata=None,
+    probability_bounds=None,
 ):
     """
     Save diagnostic plots for one sample from a loader.
@@ -399,6 +411,9 @@ def inspect_probability_maps(
 
     lightning_probs = prob_map[lightning_mask]
     background_probs = prob_map[background_mask]
+    probability_bounds, probability_cmap, probability_norm = _get_probability_colormap(
+        probability_bounds
+    )
 
     figure_path = os.path.join(
         output_dir, f"{prefix}_batch{batch_index}_sample{sample_index}_maps.png"
@@ -424,18 +439,30 @@ def inspect_probability_maps(
         axes[current_channel].set_title(input_label)
         plt.colorbar(im, ax=axes[current_channel], fraction=0.046, pad=0.04)
 
-    im_prob = axes[-4].imshow(prob_map, cmap="magma", vmin=0.0, vmax=1.0)
+    im_prob = axes[-4].imshow(prob_map, cmap=probability_cmap, norm=probability_norm)
     axes[-4].set_title("Predicted Probabilities")
-    plt.colorbar(im_prob, ax=axes[-4], fraction=0.046, pad=0.04)
+    plt.colorbar(
+        im_prob,
+        ax=axes[-4],
+        fraction=0.046,
+        pad=0.04,
+        ticks=probability_bounds,
+    )
 
     im_true = axes[-3].imshow(true_map, cmap="Blues")
     axes[-3].set_title("True Lightning")
     plt.colorbar(im_true, ax=axes[-3], fraction=0.046, pad=0.04)
 
-    im_overlay = axes[-2].imshow(prob_map, cmap="magma", vmin=0.0, vmax=1.0)
+    im_overlay = axes[-2].imshow(prob_map, cmap=probability_cmap, norm=probability_norm)
     axes[-2].contour(true_map, levels=[0.5], colors="cyan", linewidths=1)
     axes[-2].set_title("Probabilities + Truth Contour")
-    plt.colorbar(im_overlay, ax=axes[-2], fraction=0.046, pad=0.04)
+    plt.colorbar(
+        im_overlay,
+        ax=axes[-2],
+        fraction=0.046,
+        pad=0.04,
+        ticks=probability_bounds,
+    )
 
     im_binary = axes[-1].imshow(pred_binary_map, cmap="gray", vmin=0.0, vmax=1.0)
     axes[-1].contour(true_map, levels=[0.5], colors="red", linewidths=1)
@@ -587,6 +614,7 @@ def inspect_geo_probability_map(
     max_lat=None,
     min_lon=None,
     max_lon=None,
+    probability_bounds=None,
 ):
     """
     Save diagnostic plots for one sample from a loader.
@@ -640,6 +668,9 @@ def inspect_geo_probability_map(
 
     lightning_probs = prob_map[lightning_mask]
     background_probs = prob_map[background_mask]
+    probability_bounds, probability_cmap, probability_norm = _get_probability_colormap(
+        probability_bounds
+    )
 
     figure_path = os.path.join(
         output_dir, f"{prefix}_batch{batch_index}_sample{sample_index}_maps.png"
@@ -662,9 +693,8 @@ def inspect_geo_probability_map(
     _apply_geo_axis_style(axes[-2], min_lon, max_lon, min_lat, max_lat)
     im_overlay = axes[-2].imshow(
         prob_map,
-        cmap="magma",
-        vmin=0.0,
-        vmax=1.0,
+        cmap=probability_cmap,
+        norm=probability_norm,
         extent=extent,
         origin="lower",
         transform=ccrs.PlateCarree(),
@@ -679,7 +709,13 @@ def inspect_geo_probability_map(
         transform=ccrs.PlateCarree(),
     )
     axes[-2].set_title("Probabilities + Truth Contour")
-    plt.colorbar(im_overlay, ax=axes[-2], fraction=0.046, pad=0.04)
+    plt.colorbar(
+        im_overlay,
+        ax=axes[-2],
+        fraction=0.046,
+        pad=0.04,
+        ticks=probability_bounds,
+    )
 
     # binary decision map
     _apply_geo_axis_style(axes[-1], min_lon, max_lon, min_lat, max_lat)
