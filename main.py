@@ -1,10 +1,13 @@
 import os
 import random
+
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, Subset, DataLoader
 
+from config.experiment import CASE_CONFIG, MODEL_CONFIG, RUN_CONFIG
+from config.constants import MAIN_PATH
 from data.preprocessing import build_and_save_tensors, mean_std_norm
 from models.unet import UNet
 from training.train import train_model
@@ -12,16 +15,6 @@ from training.visualization import (
     inspect_probability_maps,
     plot_original_maps_for_loader_sample,
 )
-
-MAIN_PATH = "/Users/karinpitlik/Desktop/DataScience/Thesis"
-CASES = [
-    "Case1_Nov_2022_23_25",
-    "Case2_Jan_2023_11_16",
-    "Case3_Mar_2023_13_15",
-    "Case4_Apr_2023_09_13",
-    "Case5_Jan_2024_26_31",
-    "Case6_Nov_2025_24_25",
-]
 
 
 def set_seed(seed_value):
@@ -143,33 +136,26 @@ def clip_normalized_tensor(X, clip_value):
 
 
 if __name__ == "__main__":
-    # set to True when you want to train the model, and false when only evaluating it
-    # also change use_seed to false when random results are required
-    to_train = False
-    use_seed = True
-    seed_value = 42
-    plot_raw_tensors = True
-
-    # case configuration
-    case = CASES[5]
-    atm_params = ["KI", "CAPE2D", "LPI", "PREC_RATE", "FLUX_UP", "WMAX_LAYER"]
-    space_res = "24by24"
-    time_res = "1_hours"
-    expected_input_channels = len(atm_params)
+    run_config = RUN_CONFIG
+    model_config = MODEL_CONFIG
+    case_config = CASE_CONFIG
 
     # paths configuration
-    wrf_path = f"{MAIN_PATH}/{case}/Ens/Raw/"
-    entln_path = f"{MAIN_PATH}/{case}/ENTLN/{space_res}/{time_res}"
-    tensor_path = f"{MAIN_PATH}/{case}/Ens/Tensors"
-    experiment_tag = get_experiment_tag(use_seed, seed_value)
+    wrf_path = f"{MAIN_PATH}/{case_config.case}/Ens/Raw/"
+    entln_path = (
+        f"{MAIN_PATH}/{case_config.case}/ENTLN/"
+        f"{case_config.space_res}/{case_config.time_res}"
+    )
+    tensor_path = f"{MAIN_PATH}/{case_config.case}/Ens/Tensors"
+    experiment_tag = get_experiment_tag(run_config.use_seed, run_config.seed_value)
     weights_save_path = os.path.join(tensor_path, f"unet_weights_{experiment_tag}.pth")
 
-    if use_seed:
-        set_seed(seed_value)
-        print(f"Using fixed seed: {seed_value}")
+    if run_config.use_seed:
+        set_seed(run_config.seed_value)
+        print(f"Using fixed seed: {run_config.seed_value}")
     else:
         print("Using random training without a fixed seed.")
-        if not to_train:
+        if not run_config.to_train:
             raise ValueError(
                 "Evaluation-only mode without a seed is not reliable. "
                 "Set use_seed=True so the validation split matches the saved weights."
@@ -177,13 +163,8 @@ if __name__ == "__main__":
 
     # DL model configuration
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    pos_weight = torch.tensor([5000.0]).to(device)
+    pos_weight = torch.tensor([model_config.pos_weight]).to(device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    num_epochs = 10
-    batch_size = 50
-    decision_threshold = 0.95
-    clip_after_normalization = True
-    normalization_clip_value = 4.0
 
     # check if case tensors exist
     tensors_exist = False
@@ -198,41 +179,41 @@ if __name__ == "__main__":
 
         X, y, sample_groups = load_saved_tensors(tensor_path)
 
-        if X.shape[1] != expected_input_channels:
+        if X.shape[1] != case_config.expected_input_channels:
             print(
                 "Saved tensors do not match the configured atmospheric parameters. "
-                f"Expected {expected_input_channels} input channels from atm_params, "
+                f"Expected {case_config.expected_input_channels} input channels from atm_params, "
                 f"but found {X.shape[1]} in X_final.pt. Rebuilding tensors."
             )
             build_and_save_tensors(
                 wrf_path=wrf_path,
                 entln_path=entln_path,
                 tensor_path=tensor_path,
-                atm_params=atm_params,
-                space_res=space_res,
-                time_res=time_res,
+                atm_params=case_config.atm_params,
+                space_res=case_config.space_res,
+                time_res=case_config.time_res,
             )
             X, y, sample_groups = load_saved_tensors(tensor_path)
 
         model = UNet(n_channels=X.shape[1], n_classes=1).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        optimizer = torch.optim.Adam(model.parameters(), lr=model_config.learning_rate)
 
         # get indices of training and validation datasets after splitting
         train_loader_generator = None
-        if use_seed:
-            train_loader_generator = torch.Generator().manual_seed(seed_value)
+        if run_config.use_seed:
+            train_loader_generator = torch.Generator().manual_seed(run_config.seed_value)
 
         train_idx, val_idx = split_indices_by_group(
             sample_groups,
-            train_fraction=0.8,
-            seed=seed_value if use_seed else None,
+            train_fraction=model_config.train_fraction,
+            seed=run_config.seed_value if run_config.use_seed else None,
         )
         print(
             f"Group-aware split: {len(set(sample_groups[i] for i in train_idx))} train groups, "
             f"{len(set(sample_groups[i] for i in val_idx))} val groups."
         )
 
-        if plot_raw_tensors:
+        if run_config.plot_raw_tensors:
             X_raw = X.clone()
             y_raw = y.clone()
 
@@ -258,31 +239,31 @@ if __name__ == "__main__":
                 neginf=0.0,
             )
 
-        if clip_after_normalization:
-            X = clip_normalized_tensor(X, normalization_clip_value)
+        if model_config.clip_after_normalization:
+            X = clip_normalized_tensor(X, model_config.normalization_clip_value)
 
         save_tensor_stats_report(
             X=X,
             y=y,
             tensor_path=tensor_path,
             experiment_tag=experiment_tag,
-            channel_names=atm_params,
+            channel_names=case_config.atm_params,
         )
 
         full_dataset = TensorDataset(X, y)
         train_loader = DataLoader(
             Subset(full_dataset, train_idx),
-            batch_size=batch_size,
+            batch_size=model_config.batch_size,
             shuffle=True,
             generator=train_loader_generator,
         )
         val_loader = DataLoader(
             Subset(full_dataset, val_idx),
-            batch_size=batch_size,
+            batch_size=model_config.batch_size,
             shuffle=False,
         )
 
-        if to_train:
+        if run_config.to_train:
             # run train and evaluation
             history = train_model(
                 model=model,
@@ -290,9 +271,9 @@ if __name__ == "__main__":
                 val_loader=val_loader,
                 optimizer=optimizer,
                 criterion=criterion,
-                num_epochs=num_epochs,
+                num_epochs=model_config.num_epochs,
                 device=device,
-                decision_threshold=decision_threshold,  # change threshold
+                decision_threshold=model_config.decision_threshold,  # change threshold
             )
             # save the model's state for future runs
             torch.save(model.state_dict(), weights_save_path)
@@ -315,15 +296,15 @@ if __name__ == "__main__":
                 batch_index=1,
                 sample_index=0,
                 input_channel=1,
-                decision_threshold=0.98,
-                thresholds=[0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1],
+                decision_threshold=model_config.decision_threshold,
+                thresholds=model_config.visualization_thresholds,
                 prefix=f"val_{experiment_tag}",
                 require_lightning=True,
                 lightning_occurrence_index=0,
-                channel_names=atm_params,
+                channel_names=case_config.atm_params,
                 sample_metadata=sample_groups,
             )
-            if plot_raw_tensors:
+            if run_config.plot_raw_tensors:
                 plot_original_maps_for_loader_sample(
                     X_raw,
                     y_raw,
@@ -331,7 +312,7 @@ if __name__ == "__main__":
                     inspection_result=inspection_result,
                     output_dir="training/visualizations",
                     prefix="raw",
-                    channel_names=atm_params,
+                    channel_names=case_config.atm_params,
                     sample_metadata=sample_groups,
                 )
 
@@ -340,7 +321,7 @@ if __name__ == "__main__":
             wrf_path=wrf_path,
             entln_path=entln_path,
             tensor_path=tensor_path,
-            atm_params=atm_params,
-            space_res=space_res,
-            time_res=time_res,
+            atm_params=case_config.atm_params,
+            space_res=case_config.space_res,
+            time_res=case_config.time_res,
         )

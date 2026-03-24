@@ -1,0 +1,28 @@
+from config.constants import CASES
+from config.schema import CaseConfig, ModelConfig, RunConfig
+
+RUN_CONFIG = RunConfig(
+    to_train=False,
+    use_seed=True,
+    seed_value=42,
+    plot_raw_tensors=True,
+)
+
+MODEL_CONFIG = ModelConfig(
+    learning_rate=0.001,
+    pos_weight=5000.0,
+    num_epochs=10,
+    batch_size=50,
+    decision_threshold=0.9,
+    clip_after_normalization=True,
+    normalization_clip_value=4.0,
+    train_fraction=0.8,
+    visualization_thresholds=[0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0],
+)
+
+CASE_CONFIG = CaseConfig(
+    case=CASES[5],
+    atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE", "FLUX_UP", "WMAX_LAYER"],
+    space_res="24by24",
+    time_res="1_hours",
+)
