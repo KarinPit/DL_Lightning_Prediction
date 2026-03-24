@@ -30,6 +30,10 @@ class CaseConfig:
     atm_params: list[str]
     space_res: str = "24by24"
     time_res: str = "1_hours"
+    min_lat: int = 27.296
+    max_lat: int = 36.598
+    min_lon: int = 27.954
+    max_lon: int = 39.292
 
     @property
     def expected_input_channels(self):

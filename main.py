@@ -14,6 +14,7 @@ from training.train import train_model
 from training.visualization import (
     inspect_probability_maps,
     plot_original_maps_for_loader_sample,
+    inspect_geo_probability_map,
 )
 
 
@@ -201,7 +202,9 @@ if __name__ == "__main__":
         # get indices of training and validation datasets after splitting
         train_loader_generator = None
         if run_config.use_seed:
-            train_loader_generator = torch.Generator().manual_seed(run_config.seed_value)
+            train_loader_generator = torch.Generator().manual_seed(
+                run_config.seed_value
+            )
 
         train_idx, val_idx = split_indices_by_group(
             sample_groups,
@@ -304,6 +307,28 @@ if __name__ == "__main__":
                 channel_names=case_config.atm_params,
                 sample_metadata=sample_groups,
             )
+
+            inspect_geo_probability_map(
+                model,
+                val_loader,
+                device,
+                output_dir="training/visualizations",
+                batch_index=1,
+                sample_index=0,
+                input_channel=1,
+                decision_threshold=model_config.decision_threshold,
+                thresholds=model_config.visualization_thresholds,
+                prefix=f"val_{experiment_tag}",
+                require_lightning=True,
+                lightning_occurrence_index=0,
+                channel_names=case_config.atm_params,
+                sample_metadata=sample_groups,
+                min_lat=CASE_CONFIG.min_lat,
+                max_lat=CASE_CONFIG.max_lat,
+                min_lon=CASE_CONFIG.min_lon,
+                max_lon=CASE_CONFIG.max_lon,
+            )
+
             if run_config.plot_raw_tensors:
                 plot_original_maps_for_loader_sample(
                     X_raw,

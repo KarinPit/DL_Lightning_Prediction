@@ -1,6 +1,8 @@
 import os
 
 import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 import numpy as np
 import torch
 from torch.utils.data import Subset
@@ -91,10 +93,7 @@ def _resolve_sample_selection(
         original_sample_index = _resolve_dataset_sample_index(
             data_loader.dataset, loader_sample_index
         )
-        if (
-            sample_metadata is not None
-            and original_sample_index < len(sample_metadata)
-        ):
+        if sample_metadata is not None and original_sample_index < len(sample_metadata):
             sample_label = sample_metadata[original_sample_index]
 
     return {
@@ -111,6 +110,23 @@ def _channel_label(channel_index, channel_names=None):
     if channel_names is not None and channel_index < len(channel_names):
         return f"Input Channel {channel_index}: {channel_names[channel_index]}"
     return f"Input Channel {channel_index}"
+
+
+def _apply_geo_axis_style(axis, min_lon, max_lon, min_lat, max_lat):
+    """Apply a consistent Cartopy styling to a geographic axis."""
+    axis.set_extent([min_lon, max_lon, min_lat, max_lat], crs=ccrs.PlateCarree())
+    axis.coastlines(resolution="10m")
+    axis.add_feature(cfeature.BORDERS, linestyle=":")
+    gridliner = axis.gridlines(
+        crs=ccrs.PlateCarree(),
+        draw_labels=True,
+        linewidth=0.5,
+        color="gray",
+        alpha=0.5,
+        linestyle="--",
+    )
+    gridliner.top_labels = False
+    gridliner.right_labels = False
 
 
 def plot_original_sample_maps(
@@ -472,7 +488,8 @@ def inspect_probability_maps(
             file.write(
                 "Input channels: "
                 + ", ".join(
-                    f"{idx} ({name})" for idx, name in enumerate(channel_names[: xb.shape[1]])
+                    f"{idx} ({name})"
+                    for idx, name in enumerate(channel_names[: xb.shape[1]])
                 )
                 + "\n"
             )
@@ -481,9 +498,7 @@ def inspect_probability_maps(
         file.write(f"Selected input channel: {channel_label}\n")
         file.write(f"Require lightning: {require_lightning}\n")
         if require_lightning:
-            file.write(
-                f"Lightning occurrence index: {lightning_occurrence_index}\n"
-            )
+            file.write(f"Lightning occurrence index: {lightning_occurrence_index}\n")
         file.write(f"Decision threshold shown in map: {decision_threshold}\n\n")
 
         file.write("Probability stats\n")
@@ -542,6 +557,172 @@ def inspect_probability_maps(
         "figure_path": figure_path,
         "hist_path": hist_path,
         "summary_path": summary_path,
+        "lightning_probs": lightning_probs,
+        "background_probs": background_probs,
+        "threshold_rows": threshold_rows,
+        "batch_index": batch_index,
+        "sample_index": sample_index,
+        "loader_sample_index": loader_sample_index,
+        "original_sample_index": original_sample_index,
+        "sample_label": sample_label,
+    }
+
+
+def inspect_geo_probability_map(
+    model,
+    data_loader,
+    device,
+    output_dir="training/visualizations",
+    batch_index=0,
+    sample_index=0,
+    input_channel=0,
+    decision_threshold=0.5,
+    thresholds=None,
+    prefix="val",
+    require_lightning=False,
+    lightning_occurrence_index=0,
+    channel_names=None,
+    sample_metadata=None,
+    min_lat=None,
+    max_lat=None,
+    min_lon=None,
+    max_lon=None,
+):
+    """
+    Save diagnostic plots for one sample from a loader.
+
+    Outputs:
+    - all input channel maps
+    - predicted probability map
+    - true lightning map
+    - probability map with true lightning contour
+    - histogram of lightning-vs-background probabilities
+    - simple threshold summary text file
+    """
+    if thresholds is None:
+        thresholds = [0.01, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5]
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    selection = _resolve_sample_selection(
+        data_loader=data_loader,
+        batch_index=batch_index,
+        sample_index=sample_index,
+        require_lightning=require_lightning,
+        lightning_occurrence_index=lightning_occurrence_index,
+        sample_metadata=sample_metadata,
+    )
+    batch_index = selection["batch_index"]
+    sample_index = selection["sample_index"]
+    loader_sample_index = selection["loader_sample_index"]
+    original_sample_index = selection["original_sample_index"]
+    sample_label = selection["sample_label"]
+
+    xb, yb = _get_batch(data_loader, batch_index)
+    xb, yb = _sanitize_batch(xb, yb)
+    yb = (yb > 0).float()
+
+    if sample_index >= xb.shape[0]:
+        raise IndexError(
+            f"Sample index {sample_index} is out of range for batch size {xb.shape[0]}."
+        )
+
+    with torch.no_grad():
+        logits = model(xb.to(device))
+        probs = torch.sigmoid(logits).detach().cpu()
+
+    prob_map = probs[sample_index, 0].numpy()
+    true_map = yb[sample_index, 0].detach().cpu().numpy()
+    pred_binary_map = (prob_map >= decision_threshold).astype(np.float32)
+
+    lightning_mask = true_map > 0.5
+    background_mask = ~lightning_mask
+
+    lightning_probs = prob_map[lightning_mask]
+    background_probs = prob_map[background_mask]
+
+    figure_path = os.path.join(
+        output_dir, f"{prefix}_batch{batch_index}_sample{sample_index}_maps.png"
+    )
+
+    # plotting
+    panel_count = 2
+    fig, axes = plt.subplots(
+        1,
+        panel_count,
+        figsize=(6.2 * panel_count, 5.5),
+        subplot_kw={"projection": ccrs.PlateCarree()},
+    )
+    if panel_count == 1:
+        axes = [axes]
+
+    extent = [min_lon, max_lon, min_lat, max_lat]
+
+    # probability map
+    _apply_geo_axis_style(axes[-2], min_lon, max_lon, min_lat, max_lat)
+    im_overlay = axes[-2].imshow(
+        prob_map,
+        cmap="magma",
+        vmin=0.0,
+        vmax=1.0,
+        extent=extent,
+        origin="lower",
+        transform=ccrs.PlateCarree(),
+    )
+    axes[-2].contour(
+        true_map,
+        levels=[0.5],
+        colors="cyan",
+        linewidths=1,
+        extent=extent,
+        origin="lower",
+        transform=ccrs.PlateCarree(),
+    )
+    axes[-2].set_title("Probabilities + Truth Contour")
+    plt.colorbar(im_overlay, ax=axes[-2], fraction=0.046, pad=0.04)
+
+    # binary decision map
+    _apply_geo_axis_style(axes[-1], min_lon, max_lon, min_lat, max_lat)
+    im_binary = axes[-1].imshow(
+        pred_binary_map,
+        cmap="gray",
+        vmin=0.0,
+        vmax=1.0,
+        extent=extent,
+        origin="lower",
+        transform=ccrs.PlateCarree(),
+    )
+    axes[-1].contour(
+        true_map,
+        levels=[0.5],
+        colors="red",
+        linewidths=1,
+        extent=extent,
+        origin="lower",
+        transform=ccrs.PlateCarree(),
+    )
+    axes[-1].set_title(f"Pred >= {decision_threshold}")
+    plt.colorbar(im_binary, ax=axes[-1], fraction=0.046, pad=0.04)
+
+    fig.tight_layout()
+    fig.savefig(figure_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    threshold_rows = _threshold_summary(lightning_probs, background_probs, thresholds)
+
+    print(f"Saved map figure to: {figure_path}")
+
+    if sample_label is not None:
+        print(f"Sample timestamp/group: {sample_label}")
+    print(
+        f"Visualized batch={batch_index}, sample={sample_index}, input_channel={input_channel}"
+    )
+
+    if original_sample_index is not None:
+        print(f"Original dataset sample index: {original_sample_index}")
+
+    return {
+        "figure_path": figure_path,
         "lightning_probs": lightning_probs,
         "background_probs": background_probs,
         "threshold_rows": threshold_rows,

@@ -25,4 +25,8 @@ CASE_CONFIG = CaseConfig(
     atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE", "FLUX_UP", "WMAX_LAYER"],
     space_res="24by24",
     time_res="1_hours",
+    min_lat=27.296,
+    max_lat=36.598,
+    min_lon=27.954,
+    max_lon=39.292,
 )
