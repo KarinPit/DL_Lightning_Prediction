@@ -1,4 +1,7 @@
 Sample: batch=0, sample=7
+Loader sample index: 7
+Original dataset sample index: 33
+Sample timestamp/group: 2025-11-25_10/00/00
 Input channels: 0 (KI), 1 (CAPE2D), 2 (LPI), 3 (PREC_RATE), 4 (FLUX_UP), 5 (WMAX_LAYER)
 Selected input channel: Input Channel 1: CAPE2D
 Require lightning: True
@@ -7,16 +10,16 @@ Decision threshold shown in map: 0.98
 
 Probability stats
 Lightning pixels: 1 | Background pixels: 1680
-Lightning probs -> min=0.999997, max=0.999997, mean=0.999997, median=0.999997
-Background probs -> min=0.364510, max=0.999999, mean=0.727488, median=0.772079
+Lightning probs -> min=0.986520, max=0.986520, mean=0.986520, median=0.986520
+Background probs -> min=0.359858, max=0.997457, mean=0.547471, median=0.402047
 
 Threshold summary
-threshold=0.500 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.7375
-threshold=0.600 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.6464
-threshold=0.700 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.5726
-threshold=0.800 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.4673
-threshold=0.900 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.3536
-threshold=0.950 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.2643
+threshold=0.500 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.3940
+threshold=0.600 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.3137
+threshold=0.700 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.2542
+threshold=0.800 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.2024
+threshold=0.900 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.1470
+threshold=0.950 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.1060
 threshold=1.000 | lightning_detected_fraction=0.0000 | background_above_threshold_fraction=0.0000
 
 Saved files

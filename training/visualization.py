@@ -3,6 +3,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from torch.utils.data import Subset
 
 
 def _sanitize_batch(xb, yb):
@@ -61,6 +62,249 @@ def _threshold_summary(lightning_probs, background_probs, thresholds):
     return rows
 
 
+def _resolve_dataset_sample_index(dataset, relative_index):
+    """Map a loader-relative index back to the original dataset index."""
+    if isinstance(dataset, Subset):
+        subset_index = dataset.indices[relative_index]
+        return _resolve_dataset_sample_index(dataset.dataset, subset_index)
+    return relative_index
+
+
+def _resolve_sample_selection(
+    data_loader,
+    batch_index=0,
+    sample_index=0,
+    require_lightning=False,
+    lightning_occurrence_index=0,
+    sample_metadata=None,
+):
+    """Resolve loader and dataset indices for a selected sample."""
+    if require_lightning:
+        batch_index, sample_index = _find_sample_with_lightning(
+            data_loader, occurrence_index=lightning_occurrence_index
+        )
+
+    loader_sample_index = batch_index * data_loader.batch_size + sample_index
+    original_sample_index = None
+    sample_label = None
+    if loader_sample_index < len(data_loader.dataset):
+        original_sample_index = _resolve_dataset_sample_index(
+            data_loader.dataset, loader_sample_index
+        )
+        if (
+            sample_metadata is not None
+            and original_sample_index < len(sample_metadata)
+        ):
+            sample_label = sample_metadata[original_sample_index]
+
+    return {
+        "batch_index": batch_index,
+        "sample_index": sample_index,
+        "loader_sample_index": loader_sample_index,
+        "original_sample_index": original_sample_index,
+        "sample_label": sample_label,
+    }
+
+
+def _channel_label(channel_index, channel_names=None):
+    """Return a readable channel label."""
+    if channel_names is not None and channel_index < len(channel_names):
+        return f"Input Channel {channel_index}: {channel_names[channel_index]}"
+    return f"Input Channel {channel_index}"
+
+
+def plot_original_sample_maps(
+    X_original,
+    y_original,
+    output_dir="training/visualizations",
+    original_sample_index=0,
+    channel_names=None,
+    sample_metadata=None,
+    prefix="raw",
+):
+    """
+    Save plots for one sample from the original, unnormalized tensors.
+
+    This is useful for checking whether normalization introduced artifacts by
+    comparing the raw maps to the processed visualization outputs.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    if original_sample_index < 0 or original_sample_index >= len(X_original):
+        raise IndexError(
+            f"Original sample index {original_sample_index} is out of range for "
+            f"{len(X_original)} samples."
+        )
+
+    x_sample = torch.nan_to_num(
+        X_original[original_sample_index].detach().cpu().float(),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+    y_sample = torch.nan_to_num(
+        y_original[original_sample_index].detach().cpu().float(),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+    true_map = (y_sample[0] > 0).numpy().astype(np.float32)
+
+    sample_label = None
+    if sample_metadata is not None and original_sample_index < len(sample_metadata):
+        sample_label = sample_metadata[original_sample_index]
+
+    figure_path = os.path.join(
+        output_dir, f"{prefix}_sample{original_sample_index}_raw_maps.png"
+    )
+    summary_path = os.path.join(
+        output_dir, f"{prefix}_sample{original_sample_index}_raw_summary.txt"
+    )
+
+    panel_count = x_sample.shape[0] + 1
+    fig, axes = plt.subplots(1, panel_count, figsize=(4.8 * panel_count, 5))
+    if panel_count == 1:
+        axes = [axes]
+
+    for channel_index in range(x_sample.shape[0]):
+        channel_map = x_sample[channel_index].numpy()
+        label = _channel_label(channel_index, channel_names)
+        im = axes[channel_index].imshow(channel_map, cmap="viridis")
+        axes[channel_index].set_title(label)
+        plt.colorbar(im, ax=axes[channel_index], fraction=0.046, pad=0.04)
+
+    im_true = axes[-1].imshow(true_map, cmap="Blues")
+    axes[-1].set_title("True Lightning")
+    plt.colorbar(im_true, ax=axes[-1], fraction=0.046, pad=0.04)
+
+    for axis in axes:
+        axis.set_xticks([])
+        axis.set_yticks([])
+
+    fig.tight_layout()
+    fig.savefig(figure_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    with open(summary_path, "w", encoding="utf-8") as file:
+        file.write(f"Original dataset sample index: {original_sample_index}\n")
+        if sample_label is not None:
+            file.write(f"Sample timestamp/group: {sample_label}\n")
+        if channel_names is not None:
+            file.write(
+                "Input channels: "
+                + ", ".join(
+                    f"{idx} ({name})"
+                    for idx, name in enumerate(channel_names[: x_sample.shape[0]])
+                )
+                + "\n"
+            )
+        else:
+            file.write(f"Input channel count: {x_sample.shape[0]}\n")
+
+        file.write("\nRaw channel stats\n")
+        for channel_index in range(x_sample.shape[0]):
+            channel_map = x_sample[channel_index].numpy()
+            label = _channel_label(channel_index, channel_names)
+            file.write(
+                f"{label} -> min={channel_map.min():.6f}, "
+                f"max={channel_map.max():.6f}, "
+                f"mean={channel_map.mean():.6f}, "
+                f"std={channel_map.std():.6f}\n"
+            )
+
+        file.write("\nTarget stats\n")
+        file.write(
+            f"Lightning pixels: {int(true_map.sum())} | "
+            f"Total pixels: {true_map.size}\n"
+        )
+
+        file.write("\nSaved files\n")
+        file.write(f"raw_maps={figure_path}\n")
+
+    print(f"Saved raw map figure to: {figure_path}")
+    print(f"Saved raw summary to: {summary_path}")
+    if sample_label is not None:
+        print(f"Raw sample timestamp/group: {sample_label}")
+
+    return {
+        "figure_path": figure_path,
+        "summary_path": summary_path,
+        "original_sample_index": original_sample_index,
+        "sample_label": sample_label,
+    }
+
+
+def plot_original_maps_for_loader_sample(
+    X_original,
+    y_original,
+    data_loader,
+    inspection_result=None,
+    model=None,
+    device=None,
+    output_dir="training/visualizations",
+    batch_index=0,
+    sample_index=0,
+    input_channel=0,
+    decision_threshold=0.5,
+    thresholds=None,
+    prefix="raw",
+    require_lightning=False,
+    lightning_occurrence_index=0,
+    channel_names=None,
+    sample_metadata=None,
+):
+    """
+    Save raw-map plots for the same sample selected from a loader.
+
+    Use this after or alongside inspect_probability_maps() to compare the
+    original tensors against the normalized model inputs for the exact sample.
+    Parameters such as model/device/decision_threshold are accepted so this
+    function can mirror inspect_probability_maps() calls without mismatch.
+    If inspection_result is provided, its resolved sample selection is reused.
+    """
+    del model, device, decision_threshold
+    if thresholds is None:
+        thresholds = [0.01, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5]
+
+    if inspection_result is not None:
+        selection = {
+            "batch_index": inspection_result["batch_index"],
+            "sample_index": inspection_result["sample_index"],
+            "loader_sample_index": inspection_result.get("loader_sample_index"),
+            "original_sample_index": inspection_result.get("original_sample_index"),
+            "sample_label": inspection_result.get("sample_label"),
+        }
+    else:
+        selection = _resolve_sample_selection(
+            data_loader=data_loader,
+            batch_index=batch_index,
+            sample_index=sample_index,
+            require_lightning=require_lightning,
+            lightning_occurrence_index=lightning_occurrence_index,
+            sample_metadata=sample_metadata,
+        )
+
+    if selection["original_sample_index"] is None:
+        raise ValueError("Could not resolve the original dataset sample index.")
+
+    result = plot_original_sample_maps(
+        X_original=X_original,
+        y_original=y_original,
+        output_dir=output_dir,
+        original_sample_index=selection["original_sample_index"],
+        channel_names=channel_names,
+        sample_metadata=sample_metadata,
+        prefix=(
+            f"{prefix}_batch{selection['batch_index']}_sample"
+            f"{selection['sample_index']}"
+        ),
+    )
+    result.update(selection)
+    result["input_channel"] = input_channel
+    result["thresholds"] = thresholds
+    return result
+
+
 def inspect_probability_maps(
     model,
     data_loader,
@@ -75,6 +319,7 @@ def inspect_probability_maps(
     require_lightning=False,
     lightning_occurrence_index=0,
     channel_names=None,
+    sample_metadata=None,
 ):
     """
     Save diagnostic plots for one sample from a loader.
@@ -92,10 +337,19 @@ def inspect_probability_maps(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    if require_lightning:
-        batch_index, sample_index = _find_sample_with_lightning(
-            data_loader, occurrence_index=lightning_occurrence_index
-        )
+    selection = _resolve_sample_selection(
+        data_loader=data_loader,
+        batch_index=batch_index,
+        sample_index=sample_index,
+        require_lightning=require_lightning,
+        lightning_occurrence_index=lightning_occurrence_index,
+        sample_metadata=sample_metadata,
+    )
+    batch_index = selection["batch_index"]
+    sample_index = selection["sample_index"]
+    loader_sample_index = selection["loader_sample_index"]
+    original_sample_index = selection["original_sample_index"]
+    sample_label = selection["sample_label"]
 
     xb, yb = _get_batch(data_loader, batch_index)
     xb, yb = _sanitize_batch(xb, yb)
@@ -110,9 +364,7 @@ def inspect_probability_maps(
             f"Input channel {input_channel} is out of range for {xb.shape[1]} channels."
         )
 
-    channel_label = f"Input Channel {input_channel}"
-    if channel_names is not None and input_channel < len(channel_names):
-        channel_label = f"Input Channel {input_channel}: {channel_names[input_channel]}"
+    channel_label = _channel_label(input_channel, channel_names)
 
     with torch.no_grad():
         logits = model(xb.to(device))
@@ -148,9 +400,7 @@ def inspect_probability_maps(
         axes = [axes]
 
     for current_channel, input_map in enumerate(input_maps):
-        input_label = f"Input Channel {current_channel}"
-        if channel_names is not None and current_channel < len(channel_names):
-            input_label = f"Input Channel {current_channel}: {channel_names[current_channel]}"
+        input_label = _channel_label(current_channel, channel_names)
 
         im = axes[current_channel].imshow(input_map, cmap="viridis")
         if current_channel == input_channel:
@@ -213,6 +463,11 @@ def inspect_probability_maps(
 
     with open(summary_path, "w", encoding="utf-8") as file:
         file.write(f"Sample: batch={batch_index}, sample={sample_index}\n")
+        file.write(f"Loader sample index: {loader_sample_index}\n")
+        if original_sample_index is not None:
+            file.write(f"Original dataset sample index: {original_sample_index}\n")
+        if sample_label is not None:
+            file.write(f"Sample timestamp/group: {sample_label}\n")
         if channel_names is not None:
             file.write(
                 "Input channels: "
@@ -274,9 +529,14 @@ def inspect_probability_maps(
     print(f"Saved map figure to: {figure_path}")
     print(f"Saved histogram to: {hist_path}")
     print(f"Saved summary to: {summary_path}")
+    if sample_label is not None:
+        print(f"Sample timestamp/group: {sample_label}")
     print(
         f"Visualized batch={batch_index}, sample={sample_index}, input_channel={input_channel}"
     )
+
+    if original_sample_index is not None:
+        print(f"Original dataset sample index: {original_sample_index}")
 
     return {
         "figure_path": figure_path,
@@ -287,4 +547,7 @@ def inspect_probability_maps(
         "threshold_rows": threshold_rows,
         "batch_index": batch_index,
         "sample_index": sample_index,
+        "loader_sample_index": loader_sample_index,
+        "original_sample_index": original_sample_index,
+        "sample_label": sample_label,
     }

@@ -7,6 +7,8 @@ import torch
 import xarray as xr
 from tqdm import tqdm
 
+NORMALIZATION_EPS = 1e-6
+
 
 def extract_timestamp(filename, is_entln=False):
     """Extracts the date and time from the filename of the raw files"""
@@ -61,13 +63,31 @@ def load_nc_layer(file_path, variable_name):
 
 
 def mean_std_norm(train_X):
-    """calculate mean and standard deviation of a given train dataset"""
+    """Calculate robust mean/std values that will not produce NaNs in normalization."""
     means = []
     stds = []
 
     for c in range(train_X.shape[1]):
-        mean = train_X[:, c, :, :].mean()
-        std = train_X[:, c, :, :].std()
+        channel_tensor = torch.nan_to_num(
+            train_X[:, c, :, :].float(),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        mean = channel_tensor.mean()
+        std = channel_tensor.std()
+
+        if not torch.isfinite(mean):
+            mean = torch.tensor(0.0, dtype=channel_tensor.dtype, device=channel_tensor.device)
+        if not torch.isfinite(std) or std.abs().item() < NORMALIZATION_EPS:
+            std = torch.tensor(
+                NORMALIZATION_EPS,
+                dtype=channel_tensor.dtype,
+                device=channel_tensor.device,
+            )
+        elif mean.abs().item() < NORMALIZATION_EPS:
+            mean = torch.tensor(0.0, dtype=channel_tensor.dtype, device=channel_tensor.device)
+
         means.append(mean)
         stds.append(std)
     return means, stds
@@ -95,7 +115,9 @@ def build_and_save_tensors(
     for param in atm_params:
         data_folder = os.path.join(wrf_path, param, "proccesed", space_res, time_res)
         if not os.path.exists(data_folder):
-            raise FileNotFoundError(f"Missing data folder for parameter '{param}': {data_folder}")
+            raise FileNotFoundError(
+                f"Missing data folder for parameter '{param}': {data_folder}"
+            )
 
         param_maps[param] = {}
         current_param_times = set()
@@ -153,7 +175,9 @@ def build_and_save_tensors(
     print(f"Total X samples: {len(all_x_samples)}")
 
     if len(all_x_samples) == 0:
-        print("No samples were created. Check if timestamps match between Ens and ENTLN.")
+        print(
+            "No samples were created. Check if timestamps match between Ens and ENTLN."
+        )
         return False
 
     final_x_tensor = torch.stack(all_x_samples, dim=0)

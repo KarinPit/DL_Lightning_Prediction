@@ -8,7 +8,10 @@ from torch.utils.data import TensorDataset, Subset, DataLoader
 from data.preprocessing import build_and_save_tensors, mean_std_norm
 from models.unet import UNet
 from training.train import train_model
-from training.visualization import inspect_probability_maps
+from training.visualization import (
+    inspect_probability_maps,
+    plot_original_maps_for_loader_sample,
+)
 
 MAIN_PATH = "/Users/karinpitlik/Desktop/DataScience/Thesis"
 CASES = [
@@ -86,12 +89,66 @@ def load_saved_tensors(tensor_path):
     return X, y, sample_groups
 
 
+def save_tensor_stats_report(X, y, tensor_path, experiment_tag, channel_names=None):
+    """Save a text report with post-normalization tensor statistics."""
+    report_path = os.path.join(
+        tensor_path, f"tensor_stats_{experiment_tag}_post_normalization.txt"
+    )
+
+    with open(report_path, "w", encoding="utf-8") as file:
+        file.write("Post-normalization tensor statistics\n\n")
+        file.write(f"X shape: {tuple(X.shape)}\n")
+        file.write(f"y shape: {tuple(y.shape)}\n\n")
+
+        file.write("X overall stats\n")
+        file.write(f"mean={X.mean().item():.6f}\n")
+        file.write(f"std={X.std().item():.6f}\n")
+        file.write(f"min={X.min().item():.6f}\n")
+        file.write(f"max={X.max().item():.6f}\n\n")
+
+        file.write("X per-channel stats\n")
+        for channel_index in range(X.shape[1]):
+            channel_tensor = X[:, channel_index, :, :]
+            channel_label = (
+                channel_names[channel_index]
+                if channel_names is not None and channel_index < len(channel_names)
+                else f"channel_{channel_index}"
+            )
+            file.write(
+                f"{channel_label}: "
+                f"mean={channel_tensor.mean().item():.6f}, "
+                f"std={channel_tensor.std().item():.6f}, "
+                f"min={channel_tensor.min().item():.6f}, "
+                f"max={channel_tensor.max().item():.6f}\n"
+            )
+
+        file.write("\ny overall stats\n")
+        file.write(f"mean={y.mean().item():.6f}\n")
+        file.write(f"std={y.std().item():.6f}\n")
+        file.write(f"min={y.min().item():.6f}\n")
+        file.write(f"max={y.max().item():.6f}\n")
+
+    print(f"Saved tensor stats report to: {report_path}")
+    return report_path
+
+
+def clip_normalized_tensor(X, clip_value):
+    """Clip normalized input tensors to a symmetric range."""
+    if clip_value is None:
+        return X
+
+    clipped_X = torch.clamp(X, min=-clip_value, max=clip_value)
+    print(f"Clipped normalized X values to [-{clip_value}, {clip_value}].")
+    return clipped_X
+
+
 if __name__ == "__main__":
     # set to True when you want to train the model, and false when only evaluating it
     # also change use_seed to false when random results are required
     to_train = False
     use_seed = True
     seed_value = 42
+    plot_raw_tensors = True
 
     # case configuration
     case = CASES[5]
@@ -125,6 +182,8 @@ if __name__ == "__main__":
     num_epochs = 10
     batch_size = 50
     decision_threshold = 0.95
+    clip_after_normalization = True
+    normalization_clip_value = 4.0
 
     # check if case tensors exist
     tensors_exist = False
@@ -173,13 +232,42 @@ if __name__ == "__main__":
             f"{len(set(sample_groups[i] for i in val_idx))} val groups."
         )
 
+        if plot_raw_tensors:
+            X_raw = X.clone()
+            y_raw = y.clone()
+
         # compute mean and std of each feature
         train_X = X[train_idx]
         means, stds = mean_std_norm(train_X)
 
-        # normalize by mean and std
+        # normalize by mean and std while keeping the tensor finite
         for c in range(X.shape[1]):
-            X[:, c, :, :] = (X[:, c, :, :] - means[c]) / (stds[c] + 1e-8)
+            channel_tensor = torch.nan_to_num(
+                X[:, c, :, :].float(),
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+            safe_mean = means[c]
+            safe_std = stds[c]
+            normalized_channel = (channel_tensor - safe_mean) / safe_std
+            X[:, c, :, :] = torch.nan_to_num(
+                normalized_channel,
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+
+        if clip_after_normalization:
+            X = clip_normalized_tensor(X, normalization_clip_value)
+
+        save_tensor_stats_report(
+            X=X,
+            y=y,
+            tensor_path=tensor_path,
+            experiment_tag=experiment_tag,
+            channel_names=atm_params,
+        )
 
         full_dataset = TensorDataset(X, y)
         train_loader = DataLoader(
@@ -219,12 +307,12 @@ if __name__ == "__main__":
             model.load_state_dict(torch.load(weights_save_path, map_location=device))
             model.eval()
 
-            inspect_probability_maps(
+            inspection_result = inspect_probability_maps(
                 model,
                 val_loader,
                 device,
                 output_dir="training/visualizations",
-                batch_index=0,
+                batch_index=1,
                 sample_index=0,
                 input_channel=1,
                 decision_threshold=0.98,
@@ -233,7 +321,19 @@ if __name__ == "__main__":
                 require_lightning=True,
                 lightning_occurrence_index=0,
                 channel_names=atm_params,
+                sample_metadata=sample_groups,
             )
+            if plot_raw_tensors:
+                plot_original_maps_for_loader_sample(
+                    X_raw,
+                    y_raw,
+                    val_loader,
+                    inspection_result=inspection_result,
+                    output_dir="training/visualizations",
+                    prefix="raw",
+                    channel_names=atm_params,
+                    sample_metadata=sample_groups,
+                )
 
     else:
         build_and_save_tensors(
