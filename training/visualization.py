@@ -20,6 +20,27 @@ def _get_batch(data_loader, batch_index):
     raise IndexError(f"Batch index {batch_index} is out of range for this data loader.")
 
 
+def _find_sample_with_lightning(data_loader, occurrence_index=0):
+    """Return the nth sample whose target contains at least one lightning pixel."""
+    found_count = 0
+
+    for current_batch_index, (xb, yb) in enumerate(data_loader):
+        _, yb = _sanitize_batch(xb, yb)
+        yb = (yb > 0).float()
+
+        for current_sample_index in range(yb.shape[0]):
+            has_lightning = torch.any(yb[current_sample_index, 0] > 0.5)
+            if has_lightning:
+                if found_count == occurrence_index:
+                    return current_batch_index, current_sample_index
+                found_count += 1
+
+    raise ValueError(
+        "No sample with lightning was found at the requested occurrence index "
+        f"({occurrence_index})."
+    )
+
+
 def _threshold_summary(lightning_probs, background_probs, thresholds):
     """Create a simple threshold summary from lightning/background probabilities."""
     rows = []
@@ -51,12 +72,15 @@ def inspect_probability_maps(
     decision_threshold=0.5,
     thresholds=None,
     prefix="val",
+    require_lightning=False,
+    lightning_occurrence_index=0,
+    channel_names=None,
 ):
     """
     Save diagnostic plots for one sample from a loader.
 
     Outputs:
-    - input channel map
+    - all input channel maps
     - predicted probability map
     - true lightning map
     - probability map with true lightning contour
@@ -68,7 +92,11 @@ def inspect_probability_maps(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    model.eval()
+    if require_lightning:
+        batch_index, sample_index = _find_sample_with_lightning(
+            data_loader, occurrence_index=lightning_occurrence_index
+        )
+
     xb, yb = _get_batch(data_loader, batch_index)
     xb, yb = _sanitize_batch(xb, yb)
     yb = (yb > 0).float()
@@ -77,12 +105,23 @@ def inspect_probability_maps(
         raise IndexError(
             f"Sample index {sample_index} is out of range for batch size {xb.shape[0]}."
         )
+    if input_channel >= xb.shape[1]:
+        raise IndexError(
+            f"Input channel {input_channel} is out of range for {xb.shape[1]} channels."
+        )
+
+    channel_label = f"Input Channel {input_channel}"
+    if channel_names is not None and input_channel < len(channel_names):
+        channel_label = f"Input Channel {input_channel}: {channel_names[input_channel]}"
 
     with torch.no_grad():
         logits = model(xb.to(device))
         probs = torch.sigmoid(logits).detach().cpu()
 
-    input_map = xb[sample_index, input_channel].detach().cpu().numpy()
+    input_maps = [
+        xb[sample_index, current_channel].detach().cpu().numpy()
+        for current_channel in range(xb.shape[1])
+    ]
     prob_map = probs[sample_index, 0].numpy()
     true_map = yb[sample_index, 0].detach().cpu().numpy()
     pred_binary_map = (prob_map >= decision_threshold).astype(np.float32)
@@ -103,29 +142,39 @@ def inspect_probability_maps(
         output_dir, f"{prefix}_batch{batch_index}_sample{sample_index}_summary.txt"
     )
 
-    fig, axes = plt.subplots(1, 5, figsize=(24, 5))
+    panel_count = xb.shape[1] + 4
+    fig, axes = plt.subplots(1, panel_count, figsize=(4.8 * panel_count, 5))
+    if panel_count == 1:
+        axes = [axes]
 
-    im0 = axes[0].imshow(input_map, cmap="viridis")
-    axes[0].set_title(f"Input Channel {input_channel}")
-    plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
+    for current_channel, input_map in enumerate(input_maps):
+        input_label = f"Input Channel {current_channel}"
+        if channel_names is not None and current_channel < len(channel_names):
+            input_label = f"Input Channel {current_channel}: {channel_names[current_channel]}"
 
-    im1 = axes[1].imshow(prob_map, cmap="magma", vmin=0.0, vmax=1.0)
-    axes[1].set_title("Predicted Probabilities")
-    plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+        im = axes[current_channel].imshow(input_map, cmap="viridis")
+        if current_channel == input_channel:
+            input_label = f"{input_label} [selected]"
+        axes[current_channel].set_title(input_label)
+        plt.colorbar(im, ax=axes[current_channel], fraction=0.046, pad=0.04)
 
-    im2 = axes[2].imshow(true_map, cmap="Blues")
-    axes[2].set_title("True Lightning")
-    plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
+    im_prob = axes[-4].imshow(prob_map, cmap="magma", vmin=0.0, vmax=1.0)
+    axes[-4].set_title("Predicted Probabilities")
+    plt.colorbar(im_prob, ax=axes[-4], fraction=0.046, pad=0.04)
 
-    im3 = axes[3].imshow(prob_map, cmap="magma", vmin=0.0, vmax=1.0)
-    axes[3].contour(true_map, levels=[0.5], colors="cyan", linewidths=1)
-    axes[3].set_title("Probabilities + Truth Contour")
-    plt.colorbar(im3, ax=axes[3], fraction=0.046, pad=0.04)
+    im_true = axes[-3].imshow(true_map, cmap="Blues")
+    axes[-3].set_title("True Lightning")
+    plt.colorbar(im_true, ax=axes[-3], fraction=0.046, pad=0.04)
 
-    im4 = axes[4].imshow(pred_binary_map, cmap="gray", vmin=0.0, vmax=1.0)
-    axes[4].contour(true_map, levels=[0.5], colors="red", linewidths=1)
-    axes[4].set_title(f"Pred >= {decision_threshold}")
-    plt.colorbar(im4, ax=axes[4], fraction=0.046, pad=0.04)
+    im_overlay = axes[-2].imshow(prob_map, cmap="magma", vmin=0.0, vmax=1.0)
+    axes[-2].contour(true_map, levels=[0.5], colors="cyan", linewidths=1)
+    axes[-2].set_title("Probabilities + Truth Contour")
+    plt.colorbar(im_overlay, ax=axes[-2], fraction=0.046, pad=0.04)
+
+    im_binary = axes[-1].imshow(pred_binary_map, cmap="gray", vmin=0.0, vmax=1.0)
+    axes[-1].contour(true_map, levels=[0.5], colors="red", linewidths=1)
+    axes[-1].set_title(f"Pred >= {decision_threshold}")
+    plt.colorbar(im_binary, ax=axes[-1], fraction=0.046, pad=0.04)
 
     for axis in axes:
         axis.set_xticks([])
@@ -164,6 +213,22 @@ def inspect_probability_maps(
 
     with open(summary_path, "w", encoding="utf-8") as file:
         file.write(f"Sample: batch={batch_index}, sample={sample_index}\n")
+        if channel_names is not None:
+            file.write(
+                "Input channels: "
+                + ", ".join(
+                    f"{idx} ({name})" for idx, name in enumerate(channel_names[: xb.shape[1]])
+                )
+                + "\n"
+            )
+        else:
+            file.write(f"Input channel count: {xb.shape[1]}\n")
+        file.write(f"Selected input channel: {channel_label}\n")
+        file.write(f"Require lightning: {require_lightning}\n")
+        if require_lightning:
+            file.write(
+                f"Lightning occurrence index: {lightning_occurrence_index}\n"
+            )
         file.write(f"Decision threshold shown in map: {decision_threshold}\n\n")
 
         file.write("Probability stats\n")
@@ -209,6 +274,9 @@ def inspect_probability_maps(
     print(f"Saved map figure to: {figure_path}")
     print(f"Saved histogram to: {hist_path}")
     print(f"Saved summary to: {summary_path}")
+    print(
+        f"Visualized batch={batch_index}, sample={sample_index}, input_channel={input_channel}"
+    )
 
     return {
         "figure_path": figure_path,
@@ -217,4 +285,6 @@ def inspect_probability_maps(
         "lightning_probs": lightning_probs,
         "background_probs": background_probs,
         "threshold_rows": threshold_rows,
+        "batch_index": batch_index,
+        "sample_index": sample_index,
     }

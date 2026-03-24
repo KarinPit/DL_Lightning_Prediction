@@ -73,7 +73,9 @@ def mean_std_norm(train_X):
     return means, stds
 
 
-def build_and_save_tensors(wrf_path, entln_path, tensor_path, atm_params, space_res, time_res):
+def build_and_save_tensors(
+    wrf_path, entln_path, tensor_path, atm_params, space_res, time_res
+):
     """Build input/target tensors from raw files and save them to disk."""
     all_keys_sets = []
 
@@ -93,7 +95,7 @@ def build_and_save_tensors(wrf_path, entln_path, tensor_path, atm_params, space_
     for param in atm_params:
         data_folder = os.path.join(wrf_path, param, "proccesed", space_res, time_res)
         if not os.path.exists(data_folder):
-            continue
+            raise FileNotFoundError(f"Missing data folder for parameter '{param}': {data_folder}")
 
         param_maps[param] = {}
         current_param_times = set()
@@ -120,6 +122,7 @@ def build_and_save_tensors(wrf_path, entln_path, tensor_path, atm_params, space_
     ens_list = [f"{i:02d}" for i in range(11)]
     all_x_samples = []
     all_y_samples = []
+    sample_groups = []
 
     for ts in tqdm(sorted(common_timestamps)):
         for ens_id in ens_list:
@@ -145,6 +148,7 @@ def build_and_save_tensors(wrf_path, entln_path, tensor_path, atm_params, space_
                     if y_tensor is not None:
                         all_x_samples.append(x_tensor)
                         all_y_samples.append(y_tensor.unsqueeze(0))
+                        sample_groups.append(ts)
 
     print(f"Total X samples: {len(all_x_samples)}")
 
@@ -164,4 +168,5 @@ def build_and_save_tensors(wrf_path, entln_path, tensor_path, atm_params, space_
 
     torch.save(final_x_tensor, os.path.join(tensor_path, "X_final.pt"))
     torch.save(final_y_tensor, os.path.join(tensor_path, "Y_final.pt"))
+    torch.save(sample_groups, os.path.join(tensor_path, "sample_groups.pt"))
     return True

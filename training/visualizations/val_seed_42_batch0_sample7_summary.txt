@@ -1,0 +1,24 @@
+Sample: batch=0, sample=7
+Input channels: 0 (KI), 1 (CAPE2D), 2 (LPI), 3 (PREC_RATE), 4 (FLUX_UP), 5 (WMAX_LAYER)
+Selected input channel: Input Channel 1: CAPE2D
+Require lightning: True
+Lightning occurrence index: 0
+Decision threshold shown in map: 0.98
+
+Probability stats
+Lightning pixels: 1 | Background pixels: 1680
+Lightning probs -> min=0.999997, max=0.999997, mean=0.999997, median=0.999997
+Background probs -> min=0.364510, max=0.999999, mean=0.727488, median=0.772079
+
+Threshold summary
+threshold=0.500 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.7375
+threshold=0.600 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.6464
+threshold=0.700 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.5726
+threshold=0.800 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.4673
+threshold=0.900 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.3536
+threshold=0.950 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.2643
+threshold=1.000 | lightning_detected_fraction=0.0000 | background_above_threshold_fraction=0.0000
+
+Saved files
+maps=training/visualizations/val_seed_42_batch0_sample7_maps.png
+histogram=training/visualizations/val_seed_42_batch0_sample7_hist.png

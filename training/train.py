@@ -1,15 +1,6 @@
 import numpy as np
 import torch
 
-from training.contigency_metrics import calc_bs, calc_bss, calc_csi, calc_far, calc_pod
-
-
-def _safe_mean(values):
-    """Mean that safely handles empty lists."""
-    if len(values) == 0:
-        return 0.0
-    return float(np.mean(values))
-
 
 def _sanitize_batch(xb, yb):
     """Replace NaN/Inf values so loss and metrics stay finite."""
@@ -25,6 +16,45 @@ def _safe_loss(loss):
     return loss
 
 
+def _update_confusion_stats(binary_preds_np, yb_np, stats):
+    """Accumulate contingency-table counts across an epoch."""
+    stats["tp"] += np.sum((binary_preds_np == 1) & (yb_np == 1))
+    stats["fn"] += np.sum((binary_preds_np == 0) & (yb_np == 1))
+    stats["fp"] += np.sum((binary_preds_np == 1) & (yb_np == 0))
+
+
+def _finalize_epoch_metrics(stats):
+    """Convert accumulated epoch statistics into metrics."""
+    csi_denom = stats["tp"] + stats["fn"] + stats["fp"]
+    far_denom = stats["tp"] + stats["fp"]
+    pod_denom = stats["tp"] + stats["fn"]
+
+    csi = 0.0 if csi_denom == 0 else stats["tp"] / csi_denom
+    far = 0.0 if far_denom == 0 else stats["fp"] / far_denom
+    pod = 0.0 if pod_denom == 0 else stats["tp"] / pod_denom
+
+    if stats["prob_count"] == 0:
+        bs = 0.0
+        bss = 0.0
+    else:
+        bs = stats["bs_sum"] / stats["prob_count"]
+        climatology = stats["target_sum"] / stats["prob_count"]
+        bs_ref = (
+            stats["target_sq_sum"]
+            - 2 * climatology * stats["target_sum"]
+            + stats["prob_count"] * (climatology**2)
+        ) / stats["prob_count"]
+        bss = 0.0 if bs_ref == 0 else 1 - (bs / bs_ref)
+
+    return {
+        "csi": csi,
+        "far": far,
+        "pod": pod,
+        "bs": float(bs),
+        "bss": float(bss),
+    }
+
+
 def evaluate_model(model, data_loader, criterion, device, decision_threshold=0.5):
     """
     Evaluate model on a loader and return averaged loss + metrics for one epoch.
@@ -37,11 +67,15 @@ def evaluate_model(model, data_loader, criterion, device, decision_threshold=0.5
     total_loss = 0.0
     total_samples = 0
 
-    csi_vals = []
-    far_vals = []
-    pod_vals = []
-    bs_vals = []
-    bss_vals = []
+    epoch_stats = {
+        "tp": 0,
+        "fn": 0,
+        "fp": 0,
+        "bs_sum": 0.0,
+        "prob_count": 0,
+        "target_sum": 0.0,
+        "target_sq_sum": 0.0,
+    }
 
     with torch.no_grad():
         for xb, yb in data_loader:
@@ -70,24 +104,22 @@ def evaluate_model(model, data_loader, criterion, device, decision_threshold=0.5
             probs_np = probs.detach().cpu().numpy()
             binary_preds_np = binary_preds.detach().cpu().numpy()
             yb_np = yb.detach().cpu().numpy()
-
-            # Make sure truth is binary for contingency metrics
-
-            csi_vals.append(calc_csi(binary_preds_np, yb_np))
-            far_vals.append(calc_far(binary_preds_np, yb_np))
-            pod_vals.append(calc_pod(binary_preds_np, yb_np))
-            bs_vals.append(calc_bs(probs_np, yb_np))
-            bss_vals.append(calc_bss(probs_np, yb_np))
+            _update_confusion_stats(binary_preds_np, yb_np, epoch_stats)
+            epoch_stats["bs_sum"] += float(np.sum((probs_np - yb_np) ** 2))
+            epoch_stats["prob_count"] += probs_np.size
+            epoch_stats["target_sum"] += float(np.sum(yb_np))
+            epoch_stats["target_sq_sum"] += float(np.sum(yb_np**2))
 
     avg_loss = total_loss / total_samples if total_samples > 0 else np.nan
+    metric_values = _finalize_epoch_metrics(epoch_stats)
 
     return {
         "loss": avg_loss,
-        "csi": _safe_mean(csi_vals),
-        "far": _safe_mean(far_vals),
-        "pod": _safe_mean(pod_vals),
-        "bs": _safe_mean(bs_vals),
-        "bss": _safe_mean(bss_vals),
+        "csi": metric_values["csi"],
+        "far": metric_values["far"],
+        "pod": metric_values["pod"],
+        "bs": metric_values["bs"],
+        "bss": metric_values["bss"],
     }
 
 
@@ -127,11 +159,15 @@ def train_model(
         total_train_loss = 0.0
         total_train_samples = 0
 
-        train_csi_vals = []
-        train_far_vals = []
-        train_pod_vals = []
-        train_bs_vals = []
-        train_bss_vals = []
+        epoch_stats = {
+            "tp": 0,
+            "fn": 0,
+            "fp": 0,
+            "bs_sum": 0.0,
+            "prob_count": 0,
+            "target_sum": 0.0,
+            "target_sq_sum": 0.0,
+        }
 
         print(f"Starting Epoch {epoch}...")
 
@@ -145,7 +181,7 @@ def train_model(
 
             logits = model(xb)
             loss = criterion(logits, yb)
-            # loss = _safe_loss(loss)
+            loss = _safe_loss(loss)
             if loss is None:
                 continue
 
@@ -157,28 +193,27 @@ def train_model(
             total_train_samples += batch_size
 
             probs = torch.sigmoid(logits)
-            print(probs.min(), probs.max())
             binary_preds = (probs > decision_threshold).int()
 
             probs_np = probs.detach().cpu().numpy()
             binary_preds_np = binary_preds.detach().cpu().numpy()
             yb_np = yb.detach().cpu().numpy()
-
-            train_csi_vals.append(calc_csi(binary_preds_np, yb_np))
-            train_far_vals.append(calc_far(binary_preds_np, yb_np))
-            train_pod_vals.append(calc_pod(binary_preds_np, yb_np))
-            train_bs_vals.append(calc_bs(probs_np, yb_np))
-            train_bss_vals.append(calc_bss(probs_np, yb_np))
+            _update_confusion_stats(binary_preds_np, yb_np, epoch_stats)
+            epoch_stats["bs_sum"] += float(np.sum((probs_np - yb_np) ** 2))
+            epoch_stats["prob_count"] += probs_np.size
+            epoch_stats["target_sum"] += float(np.sum(yb_np))
+            epoch_stats["target_sq_sum"] += float(np.sum(yb_np**2))
 
         # Average training metrics over the epoch
         avg_train_loss = (
             total_train_loss / total_train_samples if total_train_samples > 0 else 0.0
         )
-        avg_train_csi = _safe_mean(train_csi_vals)
-        avg_train_far = _safe_mean(train_far_vals)
-        avg_train_pod = _safe_mean(train_pod_vals)
-        avg_train_bs = _safe_mean(train_bs_vals)
-        avg_train_bss = _safe_mean(train_bss_vals)
+        train_metric_values = _finalize_epoch_metrics(epoch_stats)
+        avg_train_csi = train_metric_values["csi"]
+        avg_train_far = train_metric_values["far"]
+        avg_train_pod = train_metric_values["pod"]
+        avg_train_bs = train_metric_values["bs"]
+        avg_train_bss = train_metric_values["bss"]
 
         # Validation
         val_metrics = evaluate_model(
