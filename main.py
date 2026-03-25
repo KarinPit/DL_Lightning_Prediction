@@ -287,7 +287,7 @@ if __name__ == "__main__":
                 criterion=criterion,
                 num_epochs=model_config.num_epochs,
                 device=device,
-                decision_threshold=model_config.decision_threshold,  # change threshold
+                decision_threshold=model_config.decision_threshold,  # change threshold.
             )
             # save the model's state for future runs
             torch.save(model.state_dict(), weights_save_path)
