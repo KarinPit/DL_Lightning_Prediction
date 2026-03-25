@@ -152,7 +152,7 @@ if __name__ == "__main__":
     experiment_tag = get_experiment_tag(run_config.use_seed, run_config.seed_value)
     tensor_path = os.path.join(
         MAIN_PATH,
-        case_config.dataset_name,
+        case_config.tensor_dataset_name,
         "Ens",
         "Tensors",
         case_config.space_res,

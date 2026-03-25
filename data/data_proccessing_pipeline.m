@@ -11,14 +11,15 @@
 cfg = struct();
 
 % Case / variables
-cfg.case_name = 'Case6_Nov_2025_24_25';
-cfg.variable_types = {'lpi', 'KI', 'ds', 'wdiag', 'flux_prod', 'prec_rate', 'cape2d'}; %'lpi', 'KI', 'ds', 'wmax_layer', 'flux_up', 'prec_rate', 'cape2d'
+cfg.case_name = 'Case5_Jan_2024_26_31';
+% cfg.variable_types = {'lpi', 'KI', 'ds', 'wdiag', 'flux_prod', 'prec_rate', 'cape2d'};
+cfg.variable_types = {'lpi', 'KI', 'ds', 'prec_rate', 'cape2d'}; %'lpi', 'KI', 'ds', 'wmax_layer', 'flux_up', 'prec_rate', 'cape2d'
 cfg.sub_variables = containers.Map;
 cfg.sub_variables('wdiag') = {'wmax_layer', 'mflux_mean_layer', 'wplus_mean_layer'};
 
 % Time settings
-cfg.loop_start_date = datetime('2025-11-24_00:00:00','InputFormat','yyyy-MM-dd_HH:mm:ss');
-cfg.loop_end_date   = datetime('2025-11-26_00:00:00','InputFormat','yyyy-MM-dd_HH:mm:ss');
+cfg.loop_start_date = datetime('2024-01-26_00:00:00','InputFormat','yyyy-MM-dd_HH:mm:ss');
+cfg.loop_end_date   = datetime('2024-02-01_00:00:00','InputFormat','yyyy-MM-dd_HH:mm:ss');
 cfg.interval_hours  = 1;
 
 % Spatial settings

@@ -2,7 +2,7 @@ from config.constants import CASES
 from config.schema import CaseConfig, ModelConfig, RunConfig
 
 RUN_CONFIG = RunConfig(
-    to_train=False,
+    to_train=True,
     use_seed=True,
     seed_value=42,
     plot_raw_tensors=True,
@@ -24,7 +24,9 @@ CASE_CONFIG = CaseConfig(
     train_cases=CASES[:5],
     val_cases=[],
     test_cases=[],
-    atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE", "FLUX_PROD", "WDIAG"],
+    tensor_dataset_name="train_cases_1_to_5",
+    atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE"],
+    # atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE", "FLUX_PROD", "WDIAG"],
     with_subparams={"WDIAG": ["wmax_layer", "mflux_mean_layer", "wplus_mean_layer"]},
     space_res="4by4",
     time_res="1_hours",

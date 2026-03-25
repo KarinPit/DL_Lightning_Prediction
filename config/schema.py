@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class CaseConfig:
     test_cases: list[str]
     atm_params: list[str]
     with_subparams: dict[str, list[str]]
+    tensor_dataset_name: Optional[str] = None
     space_res: str = "4by4"
     time_res: str = "1_hours"
     min_lat: int = 27.296
@@ -61,6 +63,8 @@ class CaseConfig:
 
     @property
     def dataset_name(self):
+        if self.tensor_dataset_name:
+            return self.tensor_dataset_name
         train_cases = self.train_case_names
         if not train_cases:
             raise ValueError("CaseConfig.train_cases must contain at least one case.")
