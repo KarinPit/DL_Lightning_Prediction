@@ -62,6 +62,25 @@ def load_nc_layer(file_path, variable_name):
     return tensor
 
 
+def load_param_tensors(file_path, param_name, with_subparams):
+    """Load one or more tensors for a configured atmospheric parameter."""
+    variable_names = with_subparams.get(param_name, [param_name])
+    tensors = []
+
+    for variable_name in variable_names:
+        tensor = load_nc_layer(file_path, variable_name)
+        if tensor is None:
+            return None
+        tensors.append(tensor)
+
+    return tensors
+
+
+def get_param_source_names(param_name, with_subparams):
+    """Return the folder/file source names for a configured parameter."""
+    return with_subparams.get(param_name, [param_name.lower()])
+
+
 def mean_std_norm(train_X):
     """Calculate robust mean/std values that will not produce NaNs in normalization."""
     means = []
@@ -78,7 +97,9 @@ def mean_std_norm(train_X):
         std = channel_tensor.std()
 
         if not torch.isfinite(mean):
-            mean = torch.tensor(0.0, dtype=channel_tensor.dtype, device=channel_tensor.device)
+            mean = torch.tensor(
+                0.0, dtype=channel_tensor.dtype, device=channel_tensor.device
+            )
         if not torch.isfinite(std) or std.abs().item() < NORMALIZATION_EPS:
             std = torch.tensor(
                 NORMALIZATION_EPS,
@@ -86,7 +107,9 @@ def mean_std_norm(train_X):
                 device=channel_tensor.device,
             )
         elif mean.abs().item() < NORMALIZATION_EPS:
-            mean = torch.tensor(0.0, dtype=channel_tensor.dtype, device=channel_tensor.device)
+            mean = torch.tensor(
+                0.0, dtype=channel_tensor.dtype, device=channel_tensor.device
+            )
 
         means.append(mean)
         stds.append(std)
@@ -94,7 +117,7 @@ def mean_std_norm(train_X):
 
 
 def build_and_save_tensors(
-    wrf_path, entln_path, tensor_path, atm_params, space_res, time_res
+    wrf_path, entln_path, tensor_path, atm_params, space_res, time_res, case_config
 ):
     """Build input/target tensors from raw files and save them to disk."""
     all_keys_sets = []
@@ -113,26 +136,48 @@ def build_and_save_tensors(
     param_maps = {}
 
     for param in atm_params:
-        data_folder = os.path.join(wrf_path, param, "proccesed", space_res, time_res)
-        if not os.path.exists(data_folder):
-            raise FileNotFoundError(
-                f"Missing data folder for parameter '{param}': {data_folder}"
+        param_maps[param] = {}
+        source_names = get_param_source_names(param, case_config.with_subparams)
+        current_param_keys = None
+
+        for source_name in source_names:
+            data_folder = os.path.join(
+                wrf_path, param, "proccesed", source_name, space_res, time_res
+            )
+            if not os.path.exists(data_folder):
+                raise FileNotFoundError(
+                    f"Missing data folder for parameter '{param}' source "
+                    f"'{source_name}': {data_folder}"
+                )
+
+            source_file_map = {}
+
+            for file in os.listdir(data_folder):
+                if file.endswith(".nc"):
+                    ts = extract_timestamp(file)
+                    if ts:
+                        ens_id = file.split("_", 1)[0]
+                        ens_id = f"{int(ens_id):02d}" if ens_id.isdigit() else "00"
+
+                        # Keep ensemble id in the key so different members do not overwrite.
+                        combined_key = f"{ens_id}_{ts}"
+                        source_file_map[combined_key] = os.path.join(data_folder, file)
+
+            source_keys = set(source_file_map.keys())
+            current_param_keys = (
+                source_keys
+                if current_param_keys is None
+                else current_param_keys.intersection(source_keys)
             )
 
-        param_maps[param] = {}
-        current_param_times = set()
+            for combined_key in source_keys:
+                param_maps[param].setdefault(combined_key, {})[source_name] = (
+                    source_file_map[combined_key]
+                )
 
-        for file in os.listdir(data_folder):
-            if file.endswith(".nc"):
-                ts = extract_timestamp(file)
-                if ts:
-                    ens_id = file.split("_", 1)[0]
-                    ens_id = f"{int(ens_id):02d}" if ens_id.isdigit() else "00"
-
-                    # Keep ensemble id in the key so different members do not overwrite.
-                    combined_key = f"{ens_id}_{ts}"
-                    param_maps[param][combined_key] = file
-                    current_param_times.add(ts)
+        current_param_times = {
+            key.split("_", 1)[1] for key in current_param_keys or set()
+        }
 
         all_param_times.append(current_param_times)
 
@@ -145,6 +190,7 @@ def build_and_save_tensors(
     all_x_samples = []
     all_y_samples = []
     sample_groups = []
+    expected_channels = case_config.expected_input_channels
 
     for ts in tqdm(sorted(common_timestamps)):
         for ens_id in ens_list:
@@ -152,15 +198,31 @@ def build_and_save_tensors(
             if all(combined_key in param_maps[p] for p in atm_params):
                 current_tensors = []
                 for param in atm_params:
-                    file_name = param_maps[param][combined_key]
-                    file_path = os.path.join(
-                        wrf_path, param, "proccesed", space_res, time_res, file_name
+                    source_names = get_param_source_names(
+                        param, case_config.with_subparams
                     )
-                    tensor = load_nc_layer(file_path, param)
-                    if tensor is not None:
+                    source_paths = param_maps[param][combined_key]
+
+                    if param in case_config.with_subparams:
+                        for source_name in source_names:
+                            tensor = load_nc_layer(
+                                source_paths[source_name], source_name
+                            )
+                            if tensor is None:
+                                current_tensors = []
+                                break
+                            current_tensors.append(tensor)
+                    else:
+                        tensor = load_nc_layer(source_paths[source_names[0]], param)
+                        if tensor is None:
+                            current_tensors = []
+                            break
                         current_tensors.append(tensor)
 
-                if len(current_tensors) == len(atm_params):
+                    if not current_tensors:
+                        break
+
+                if len(current_tensors) == expected_channels:
                     x_tensor = torch.stack(current_tensors, dim=0)
 
                     y_file_name = entln_map[ts]

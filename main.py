@@ -40,7 +40,9 @@ def get_experiment_tag(use_seed, seed_value):
 
 
 def split_indices_by_group(groups, train_fraction=0.8, seed=None):
-    """Split indices so all samples from the same group stay together."""
+    """Split indices so all samples from the same group stay together.
+    Notice that the groups are generated in data/preprocessing- they are the different timestamps available in the data
+    """
     unique_groups = np.array(sorted(set(groups)))
     if len(unique_groups) < 2:
         raise ValueError(
@@ -83,7 +85,9 @@ def load_saved_tensors(tensor_path):
     return X, y, sample_groups
 
 
-def save_tensor_stats_report(X, y, tensor_path, experiment_tag, channel_names=None):
+def save_tensor_stats_report(
+    X, y, tensor_path, experiment_tag, channel_names=None, groups=[]
+):
     """Save a text report with post-normalization tensor statistics."""
     report_path = os.path.join(
         tensor_path, f"tensor_stats_{experiment_tag}_post_normalization.txt"
@@ -93,6 +97,8 @@ def save_tensor_stats_report(X, y, tensor_path, experiment_tag, channel_names=No
         file.write("Post-normalization tensor statistics\n\n")
         file.write(f"X shape: {tuple(X.shape)}\n")
         file.write(f"y shape: {tuple(y.shape)}\n\n")
+        file.write(f"train groups: {groups[0]}\n\n")
+        file.write(f"val groups: {groups[1]}\n\n")
 
         file.write("X overall stats\n")
         file.write(f"mean={X.mean().item():.6f}\n")
@@ -147,7 +153,7 @@ if __name__ == "__main__":
         f"{MAIN_PATH}/{case_config.case}/ENTLN/"
         f"{case_config.space_res}/{case_config.time_res}"
     )
-    tensor_path = f"{MAIN_PATH}/{case_config.case}/Ens/Tensors"
+    tensor_path = f"{MAIN_PATH}/{case_config.case}/Ens/Tensors/{case_config.space_res}"
     experiment_tag = get_experiment_tag(run_config.use_seed, run_config.seed_value)
     weights_save_path = os.path.join(tensor_path, f"unet_weights_{experiment_tag}.pth")
 
@@ -193,6 +199,7 @@ if __name__ == "__main__":
                 atm_params=case_config.atm_params,
                 space_res=case_config.space_res,
                 time_res=case_config.time_res,
+                case_config=case_config,
             )
             X, y, sample_groups = load_saved_tensors(tensor_path)
 
@@ -211,9 +218,12 @@ if __name__ == "__main__":
             train_fraction=model_config.train_fraction,
             seed=run_config.seed_value if run_config.use_seed else None,
         )
+
+        train_groups = set(sample_groups[i] for i in train_idx)
+        val_groups = set(sample_groups[i] for i in val_idx)
         print(
-            f"Group-aware split: {len(set(sample_groups[i] for i in train_idx))} train groups, "
-            f"{len(set(sample_groups[i] for i in val_idx))} val groups."
+            f"Group-aware split: {len(train_groups)} train groups, "
+            f"{len(val_groups)} val groups."
         )
 
         if run_config.plot_raw_tensors:
@@ -250,7 +260,8 @@ if __name__ == "__main__":
             y=y,
             tensor_path=tensor_path,
             experiment_tag=experiment_tag,
-            channel_names=case_config.atm_params,
+            channel_names=case_config.input_channel_names,
+            groups=[train_groups, val_groups],
         )
 
         full_dataset = TensorDataset(X, y)
@@ -304,7 +315,7 @@ if __name__ == "__main__":
                 prefix=f"val_{experiment_tag}",
                 require_lightning=True,
                 lightning_occurrence_index=0,
-                channel_names=case_config.atm_params,
+                channel_names=case_config.input_channel_names,
                 sample_metadata=sample_groups,
             )
 
@@ -321,7 +332,7 @@ if __name__ == "__main__":
                 prefix=f"val_{experiment_tag}",
                 require_lightning=True,
                 lightning_occurrence_index=0,
-                channel_names=case_config.atm_params,
+                channel_names=case_config.input_channel_names,
                 sample_metadata=sample_groups,
                 min_lat=CASE_CONFIG.min_lat,
                 max_lat=CASE_CONFIG.max_lat,
@@ -337,7 +348,7 @@ if __name__ == "__main__":
                     inspection_result=inspection_result,
                     output_dir="training/visualizations",
                     prefix="raw",
-                    channel_names=case_config.atm_params,
+                    channel_names=case_config.input_channel_names,
                     sample_metadata=sample_groups,
                 )
 
@@ -349,4 +360,5 @@ if __name__ == "__main__":
             atm_params=case_config.atm_params,
             space_res=case_config.space_res,
             time_res=case_config.time_res,
+            case_config=case_config,
         )

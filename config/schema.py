@@ -28,7 +28,8 @@ class ModelConfig:
 class CaseConfig:
     case: str
     atm_params: list[str]
-    space_res: str = "24by24"
+    with_subparams: dict[str, list[str]]
+    space_res: str = "4by4"
     time_res: str = "1_hours"
     min_lat: int = 27.296
     max_lat: int = 36.598
@@ -36,5 +37,12 @@ class CaseConfig:
     max_lon: int = 39.292
 
     @property
+    def input_channel_names(self):
+        channel_names = []
+        for param in self.atm_params:
+            channel_names.extend(self.with_subparams.get(param, [param]))
+        return channel_names
+
+    @property
     def expected_input_channels(self):
-        return len(self.atm_params)
+        return len(self.input_channel_names)

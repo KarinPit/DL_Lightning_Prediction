@@ -13,8 +13,7 @@ cfg = struct();
 % Case / variables
 cfg.case_name = 'Case6_Nov_2025_24_25';
 cfg.variable_types = {'lpi', 'KI', 'ds', 'wdiag', 'flux_prod', 'prec_rate', 'cape2d'}; %'lpi', 'KI', 'ds', 'wmax_layer', 'flux_up', 'prec_rate', 'cape2d'
-cfg.sub_variables = containers.Map;
-cfg.sub_variables('wdiag') = {'wmax_layer', 'mflux_mean_layer', 'wplus_mean_layer'};
+cfg.sub_variables = {'wdiag':{"wmax_layer", "mflux_mean_layer", "wplus_mean_layer"}}; %FIX!
 
 % Time settings
 cfg.loop_start_date = datetime('2025-11-24_00:00:00','InputFormat','yyyy-MM-dd_HH:mm:ss');
@@ -96,36 +95,26 @@ time_edges = datetime(cfg.loop_start_date:cfg.time_step:cfg.loop_end_date, ...
 %% -------- Pass 1: WRITE interval NetCDFs for all variables --------
 for v = 1:numel(cfg.variable_types)
     variable_type = cfg.variable_types{v};
+    var_cfg = prepare_variable_config(cfg, variable_type);
 
-    if isKey(cfg.sub_variables, lower(variable_type))
-        subvars = cfg.sub_variables(lower(variable_type));
-    else
-        subvars = {variable_type};
-    end
+    fprintf('\n========================================\n');
+    fprintf('Processing variable: %s\n', variable_type);
+    fprintf('========================================\n');
 
-    for sv = 1:numel(subvars)
-        current_var = subvars{sv};
-        var_cfg = prepare_variable_config(cfg, variable_type, current_var);
+    mkif(var_cfg.model_out_root);
+    mkif(var_cfg.fig_output_dir);
 
-        fprintf('\n========================================\n');
-        fprintf('Processing variable group: %s | sub-variable: %s\n', variable_type, current_var);
-        fprintf('========================================\n');
+    for t = 1:(length(time_edges)-1)
+        sdate = time_edges(t);
+        edate = time_edges(t+1);
 
-        mkif(var_cfg.model_out_root);
-        mkif(var_cfg.fig_output_dir);
+        process_model_files(var_cfg.variable_type_lower, var_cfg.model_raw_folder, var_cfg.model_out_root, ...
+            var_cfg.coords_file_path, sdate, edate, var_cfg.downgrade_factor, ...
+            lat_grid_coarse, lon_grid_coarse, var_cfg.spatial_op);
 
-        for t = 1:(length(time_edges)-1)
-            sdate = time_edges(t);
-            edate = time_edges(t+1);
-
-            process_model_files(var_cfg.read_var_name, var_cfg.model_raw_folder, var_cfg.model_out_root, ...
-                var_cfg.coords_file_path, sdate, edate, var_cfg.downgrade_factor, ...
-                lat_grid_coarse, lon_grid_coarse, var_cfg.spatial_op);
-
-            process_entln_pulse(var_cfg.entln_mat_path, var_cfg.entln_out_root, ...
-                sdate, edate, var_cfg.min_lat, var_cfg.max_lat, var_cfg.min_lon, var_cfg.max_lon, ...
-                var_cfg.bin_width_lat, var_cfg.bin_width_lon, lat_grid_coarse, lon_grid_coarse);
-        end
+        process_entln_pulse(var_cfg.entln_mat_path, var_cfg.entln_out_root, ...
+            sdate, edate, var_cfg.min_lat, var_cfg.max_lat, var_cfg.min_lon, var_cfg.max_lon, ...
+            var_cfg.bin_width_lat, var_cfg.bin_width_lon, lat_grid_coarse, lon_grid_coarse);
     end
 end
 
@@ -133,45 +122,37 @@ end
 %           FUNCTIONS
 % ===========================
 
-function var_cfg = prepare_variable_config(cfg, variable_type, current_var)
+function var_cfg = prepare_variable_config(cfg, variable_type)
     var_cfg = cfg;
 
-    % variable_type = folder name
-    % current_var   = actual variable to read/write
-    var_cfg.variable_type = variable_type;
+    var_cfg.variable_type       = variable_type;
     var_cfg.variable_type_upper = upper(variable_type);
     var_cfg.variable_type_lower = lower(variable_type);
 
-    var_cfg.read_var_name = current_var;
-    var_cfg.read_var_name_lower = lower(current_var);
-
-    % Special handling for exact NetCDF variable names
-    if strcmpi(current_var, 'KI')
-        var_cfg.read_var_name = 'KI';
-    elseif strcmpi(current_var, 'ds')
-        var_cfg.read_var_name = 'ds';
+    if strcmpi(variable_type, 'KI')
+        var_cfg.variable_type_lower = 'KI';
+        var_cfg.variable_type_nc = var_cfg.variable_type_lower;
+    elseif strcmpi(variable_type, 'ds')
+        var_cfg.variable_type_lower = 'ds';
+        var_cfg.variable_type_nc = var_cfg.variable_type_lower;
+    else
+        var_cfg.variable_type_nc = var_cfg.variable_type_lower;
     end
 
-    switch lower(current_var)
+    switch var_cfg.variable_type_lower
         case 'lpi'
             var_cfg.spatial_op  = 'mean';
             var_cfg.temporal_op = 'mean';
-        case 'ki'
+        case 'KI'
             var_cfg.spatial_op  = 'mean';
             var_cfg.temporal_op = 'mean';
         case 'ds'
             var_cfg.spatial_op  = 'mean';
             var_cfg.temporal_op = 'sum';
-        case 'wmax_layer'
+        case 'wdiag'
             var_cfg.spatial_op  = 'mean';
             var_cfg.temporal_op = 'mean';
-        case 'mflux_mean_layer'
-            var_cfg.spatial_op  = 'mean';
-            var_cfg.temporal_op = 'mean';
-        case 'wplus_mean_layer'
-            var_cfg.spatial_op  = 'mean';
-            var_cfg.temporal_op = 'mean';
-        case 'flux_prod'
+        case 'flux_up'
             var_cfg.spatial_op  = 'mean';
             var_cfg.temporal_op = 'mean';
         case 'prec_rate'
@@ -181,19 +162,17 @@ function var_cfg = prepare_variable_config(cfg, variable_type, current_var)
             var_cfg.spatial_op  = 'mean';
             var_cfg.temporal_op = 'mean';
         otherwise
-            error('Unsupported variable: %s', current_var);
+            error('Unsupported variable type: %s', var_cfg.variable_type_lower);
     end
 
-    % Folder still comes from variable_type
     var_cfg.model_raw_folder = sprintf('%s/%s/Ens/Raw/%s/', ...
         var_cfg.main_path, var_cfg.case_name, var_cfg.variable_type_upper);
 
-    % Save outputs under the actual variable name
-    var_cfg.model_out_root = sprintf('%s/proccesed/%s/%s/%s/', ...
-        var_cfg.model_raw_folder, lower(current_var), var_cfg.grid_label, var_cfg.interval_name);
+    var_cfg.model_out_root = sprintf('%s/proccesed/%s/%s/', ...
+        var_cfg.model_raw_folder, var_cfg.grid_label, var_cfg.interval_name);
 
     var_cfg.fig_output_dir = sprintf('%s/%s/Ens/Graphs/%s/%s/%s/', ...
-        var_cfg.main_path, var_cfg.case_name, upper(current_var), ...
+        var_cfg.main_path, var_cfg.case_name, var_cfg.variable_type_upper, ...
         var_cfg.grid_label, var_cfg.interval_name);
 end
 
@@ -238,7 +217,15 @@ function process_model_files(varname, variable_folder_path, output_path, coords_
 
             try
                 if strcmpi(varname,'ds')
+                    % For dynamic schemes, sum components
                     lneg = ncread(fpath, 'lneg');
+                    lpos = ncread(fpath, 'lpos');
+                    lneu = ncread(fpath, 'lneu');
+                    cube = lneg + lpos + lneu;
+                end
+                if strcmpi(varname,'wdiag')
+                    % For dynamic schemes, sum components
+                    lneg = ncread(fpath, 'wmax');
                     lpos = ncread(fpath, 'lpos');
                     lneu = ncread(fpath, 'lneu');
                     cube = lneg + lpos + lneu;
