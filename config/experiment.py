@@ -21,7 +21,9 @@ MODEL_CONFIG = ModelConfig(
 )
 
 CASE_CONFIG = CaseConfig(
-    case=CASES[5],
+    train_cases=CASES[:5],
+    val_cases=[],
+    test_cases=[],
     atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE", "FLUX_PROD", "WDIAG"],
     with_subparams={"WDIAG": ["wmax_layer", "mflux_mean_layer", "wplus_mean_layer"]},
     space_res="4by4",

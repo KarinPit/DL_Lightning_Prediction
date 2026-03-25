@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, Subset, DataLoader
 
-from config.experiment import CASE_CONFIG, MODEL_CONFIG, RUN_CONFIG
 from config.constants import MAIN_PATH
+from config.experiment import CASE_CONFIG, MODEL_CONFIG, RUN_CONFIG
 from data.preprocessing import build_and_save_tensors, mean_std_norm
 from models.unet import UNet
 from training.train import train_model
@@ -86,7 +86,7 @@ def load_saved_tensors(tensor_path):
 
 
 def save_tensor_stats_report(
-    X, y, tensor_path, experiment_tag, channel_names=None, groups=[]
+    X, y, tensor_path, experiment_tag, channel_names=None, groups=None
 ):
     """Save a text report with post-normalization tensor statistics."""
     report_path = os.path.join(
@@ -97,8 +97,9 @@ def save_tensor_stats_report(
         file.write("Post-normalization tensor statistics\n\n")
         file.write(f"X shape: {tuple(X.shape)}\n")
         file.write(f"y shape: {tuple(y.shape)}\n\n")
-        file.write(f"train groups: {groups[0]}\n\n")
-        file.write(f"val groups: {groups[1]}\n\n")
+        if groups is not None:
+            file.write(f"train groups: {groups[0]}\n\n")
+            file.write(f"val groups: {groups[1]}\n\n")
 
         file.write("X overall stats\n")
         file.write(f"mean={X.mean().item():.6f}\n")
@@ -148,13 +149,14 @@ if __name__ == "__main__":
     case_config = CASE_CONFIG
 
     # paths configuration
-    wrf_path = f"{MAIN_PATH}/{case_config.case}/Ens/Raw/"
-    entln_path = (
-        f"{MAIN_PATH}/{case_config.case}/ENTLN/"
-        f"{case_config.space_res}/{case_config.time_res}"
-    )
-    tensor_path = f"{MAIN_PATH}/{case_config.case}/Ens/Tensors/{case_config.space_res}"
     experiment_tag = get_experiment_tag(run_config.use_seed, run_config.seed_value)
+    tensor_path = os.path.join(
+        MAIN_PATH,
+        case_config.dataset_name,
+        "Ens",
+        "Tensors",
+        case_config.space_res,
+    )
     weights_save_path = os.path.join(tensor_path, f"unet_weights_{experiment_tag}.pth")
 
     if run_config.use_seed:
@@ -193,8 +195,8 @@ if __name__ == "__main__":
                 f"but found {X.shape[1]} in X_final.pt. Rebuilding tensors."
             )
             build_and_save_tensors(
-                wrf_path=wrf_path,
-                entln_path=entln_path,
+                wrf_path=None,
+                entln_path=None,
                 tensor_path=tensor_path,
                 atm_params=case_config.atm_params,
                 space_res=case_config.space_res,
@@ -354,8 +356,8 @@ if __name__ == "__main__":
 
     else:
         build_and_save_tensors(
-            wrf_path=wrf_path,
-            entln_path=entln_path,
+            wrf_path=None,
+            entln_path=None,
             tensor_path=tensor_path,
             atm_params=case_config.atm_params,
             space_res=case_config.space_res,

@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import xarray as xr
 from tqdm import tqdm
+from config.constants import MAIN_PATH
 
 NORMALIZATION_EPS = 1e-6
 
@@ -62,20 +63,6 @@ def load_nc_layer(file_path, variable_name):
     return tensor
 
 
-def load_param_tensors(file_path, param_name, with_subparams):
-    """Load one or more tensors for a configured atmospheric parameter."""
-    variable_names = with_subparams.get(param_name, [param_name])
-    tensors = []
-
-    for variable_name in variable_names:
-        tensor = load_nc_layer(file_path, variable_name)
-        if tensor is None:
-            return None
-        tensors.append(tensor)
-
-    return tensors
-
-
 def get_param_source_names(param_name, with_subparams):
     """Return the folder/file source names for a configured parameter."""
     return with_subparams.get(param_name, [param_name.lower()])
@@ -117,122 +104,130 @@ def mean_std_norm(train_X):
 
 
 def build_and_save_tensors(
-    wrf_path, entln_path, tensor_path, atm_params, space_res, time_res, case_config
+    wrf_path,
+    entln_path,
+    tensor_path,
+    atm_params,
+    space_res,
+    time_res,
+    case_config,
 ):
     """Build input/target tensors from raw files and save them to disk."""
-    all_keys_sets = []
-
-    # Loop over the files in the ENTLN folder and extract all existing timestamps
-    entln_map = {}
-    if os.path.exists(entln_path):
-        for file in os.listdir(entln_path):
-            if file.endswith(".nc"):
-                ts = extract_timestamp(file, is_entln=True)
-                if ts:
-                    entln_map[ts] = file
-
-    # Loop over the files in each atmospheric parameter folder and extract timestamps
-    all_param_times = []
-    param_maps = {}
-
-    for param in atm_params:
-        param_maps[param] = {}
-        source_names = get_param_source_names(param, case_config.with_subparams)
-        current_param_keys = None
-
-        for source_name in source_names:
-            data_folder = os.path.join(
-                wrf_path, param, "proccesed", source_name, space_res, time_res
-            )
-            if not os.path.exists(data_folder):
-                raise FileNotFoundError(
-                    f"Missing data folder for parameter '{param}' source "
-                    f"'{source_name}': {data_folder}"
-                )
-
-            source_file_map = {}
-
-            for file in os.listdir(data_folder):
-                if file.endswith(".nc"):
-                    ts = extract_timestamp(file)
-                    if ts:
-                        ens_id = file.split("_", 1)[0]
-                        ens_id = f"{int(ens_id):02d}" if ens_id.isdigit() else "00"
-
-                        # Keep ensemble id in the key so different members do not overwrite.
-                        combined_key = f"{ens_id}_{ts}"
-                        source_file_map[combined_key] = os.path.join(data_folder, file)
-
-            source_keys = set(source_file_map.keys())
-            current_param_keys = (
-                source_keys
-                if current_param_keys is None
-                else current_param_keys.intersection(source_keys)
-            )
-
-            for combined_key in source_keys:
-                param_maps[param].setdefault(combined_key, {})[source_name] = (
-                    source_file_map[combined_key]
-                )
-
-        current_param_times = {
-            key.split("_", 1)[1] for key in current_param_keys or set()
-        }
-
-        all_param_times.append(current_param_times)
-
-    # Intersection of the timestamps in the ENTLN set and the atmospheric parameter set
-    all_keys_sets = all_param_times + [set(entln_map.keys())]
-    common_timestamps = set.intersection(*all_keys_sets)
-    print(f"Found {len(common_timestamps)} common timestamps.")
-
     ens_list = [f"{i:02d}" for i in range(11)]
     all_x_samples = []
     all_y_samples = []
     sample_groups = []
     expected_channels = case_config.expected_input_channels
 
-    for ts in tqdm(sorted(common_timestamps)):
-        for ens_id in ens_list:
-            combined_key = f"{ens_id}_{ts}"
-            if all(combined_key in param_maps[p] for p in atm_params):
-                current_tensors = []
-                for param in atm_params:
-                    source_names = get_param_source_names(
-                        param, case_config.with_subparams
-                    )
-                    source_paths = param_maps[param][combined_key]
+    for case in case_config.train_case_names:
+        case_wrf_path = os.path.join(MAIN_PATH, case, "Ens", "Raw")
+        case_entln_path = os.path.join(
+            MAIN_PATH, case, "ENTLN", space_res, time_res
+        )
 
-                    if param in case_config.with_subparams:
-                        for source_name in source_names:
-                            tensor = load_nc_layer(
-                                source_paths[source_name], source_name
+        # Loop over the files in the ENTLN folder and extract all existing timestamps
+        entln_map = {}
+        if os.path.exists(case_entln_path):
+            for file in os.listdir(case_entln_path):
+                if file.endswith(".nc"):
+                    ts = extract_timestamp(file, is_entln=True)
+                    if ts:
+                        entln_map[ts] = file
+
+        # Loop over the files in each atmospheric parameter folder and extract timestamps
+        all_param_times = []
+        param_maps = {}
+
+        for param in atm_params:
+            param_maps[param] = {}
+            source_names = get_param_source_names(param, case_config.with_subparams)
+            current_param_keys = None
+
+            for source_name in source_names:
+                data_folder = os.path.join(
+                    case_wrf_path, param, "proccesed", source_name, space_res, time_res
+                )
+                if not os.path.exists(data_folder):
+                    raise FileNotFoundError(
+                        f"Missing data folder for parameter '{param}' in case "
+                        f"'{case}' source '{source_name}': {data_folder}"
+                    )
+
+                source_file_map = {}
+
+                for file in os.listdir(data_folder):
+                    if file.endswith(".nc"):
+                        ts = extract_timestamp(file)
+                        if ts:
+                            ens_id = file.split("_", 1)[0]
+                            ens_id = f"{int(ens_id):02d}" if ens_id.isdigit() else "00"
+                            combined_key = f"{ens_id}_{ts}"
+                            source_file_map[combined_key] = os.path.join(
+                                data_folder, file
                             )
+
+                source_keys = set(source_file_map.keys())
+                current_param_keys = (
+                    source_keys
+                    if current_param_keys is None
+                    else current_param_keys.intersection(source_keys)
+                )
+
+                for combined_key in source_keys:
+                    param_maps[param].setdefault(combined_key, {})[source_name] = (
+                        source_file_map[combined_key]
+                    )
+
+            current_param_times = {
+                key.split("_", 1)[1] for key in current_param_keys or set()
+            }
+            all_param_times.append(current_param_times)
+
+        all_keys_sets = all_param_times + [set(entln_map.keys())]
+        common_timestamps = set.intersection(*all_keys_sets)
+        print(f"Found {len(common_timestamps)} common timestamps for case '{case}'.")
+
+        for ts in tqdm(sorted(common_timestamps), desc=case):
+            for ens_id in ens_list:
+                combined_key = f"{ens_id}_{ts}"
+                if all(combined_key in param_maps[p] for p in atm_params):
+                    current_tensors = []
+                    for param in atm_params:
+                        source_names = get_param_source_names(
+                            param, case_config.with_subparams
+                        )
+                        source_paths = param_maps[param][combined_key]
+
+                        if param in case_config.with_subparams:
+                            for source_name in source_names:
+                                tensor = load_nc_layer(
+                                    source_paths[source_name], source_name
+                                )
+                                if tensor is None:
+                                    current_tensors = []
+                                    break
+                                current_tensors.append(tensor)
+                        else:
+                            tensor = load_nc_layer(source_paths[source_names[0]], param)
                             if tensor is None:
                                 current_tensors = []
                                 break
                             current_tensors.append(tensor)
-                    else:
-                        tensor = load_nc_layer(source_paths[source_names[0]], param)
-                        if tensor is None:
-                            current_tensors = []
+
+                        if not current_tensors:
                             break
-                        current_tensors.append(tensor)
 
-                    if not current_tensors:
-                        break
+                    if len(current_tensors) == expected_channels:
+                        x_tensor = torch.stack(current_tensors, dim=0)
 
-                if len(current_tensors) == expected_channels:
-                    x_tensor = torch.stack(current_tensors, dim=0)
+                        y_file_name = entln_map[ts]
+                        y_file_path = os.path.join(case_entln_path, y_file_name)
+                        y_tensor = load_nc_layer(y_file_path, "ildn")
 
-                    y_file_name = entln_map[ts]
-                    y_file_path = os.path.join(entln_path, y_file_name)
-                    y_tensor = load_nc_layer(y_file_path, "ildn")
-
-                    if y_tensor is not None:
-                        all_x_samples.append(x_tensor)
-                        all_y_samples.append(y_tensor.unsqueeze(0))
-                        sample_groups.append(ts)
+                        if y_tensor is not None:
+                            all_x_samples.append(x_tensor)
+                            all_y_samples.append(y_tensor.unsqueeze(0))
+                            sample_groups.append(f"{case}__{ts}")
 
     print(f"Total X samples: {len(all_x_samples)}")
 

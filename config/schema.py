@@ -26,7 +26,9 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class CaseConfig:
-    case: str
+    train_cases: list[str]
+    val_cases: list[str]
+    test_cases: list[str]
     atm_params: list[str]
     with_subparams: dict[str, list[str]]
     space_res: str = "4by4"
@@ -35,6 +37,40 @@ class CaseConfig:
     max_lat: int = 36.598
     min_lon: int = 27.954
     max_lon: int = 39.292
+
+    def _flatten_case_names(self, cases):
+        flat_cases = []
+        for case in cases:
+            if isinstance(case, (list, tuple)):
+                flat_cases.extend(self._flatten_case_names(case))
+            else:
+                flat_cases.append(case)
+        return flat_cases
+
+    @property
+    def train_case_names(self):
+        return self._flatten_case_names(self.train_cases)
+
+    @property
+    def val_case_names(self):
+        return self._flatten_case_names(self.val_cases)
+
+    @property
+    def test_case_names(self):
+        return self._flatten_case_names(self.test_cases)
+
+    @property
+    def dataset_name(self):
+        train_cases = self.train_case_names
+        if not train_cases:
+            raise ValueError("CaseConfig.train_cases must contain at least one case.")
+        if len(train_cases) == 1:
+            return train_cases[0]
+        return "multi__" + "__".join(train_cases)
+
+    @property
+    def is_multi_case(self):
+        return len(self.train_case_names) > 1
 
     @property
     def input_channel_names(self):
