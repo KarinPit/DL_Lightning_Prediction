@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from tqdm import tqdm
 
 
 def _sanitize_batch(xb, yb):
@@ -78,7 +79,7 @@ def evaluate_model(model, data_loader, criterion, device, decision_threshold=0.5
     }
 
     with torch.no_grad():
-        for xb, yb in data_loader:
+        for xb, yb in tqdm(data_loader, desc="Validation", unit="batch", leave=False):
             xb = xb.to(device)
             yb = yb.to(device)
             xb, yb = _sanitize_batch(xb, yb)
@@ -171,7 +172,7 @@ def train_model(
 
         print(f"Starting Epoch {epoch}...")
 
-        for xb, yb in train_loader:
+        for xb, yb in tqdm(train_loader, desc=f"Epoch {epoch}/{num_epochs}", unit="batch"):
             xb = xb.to(device)
             yb = yb.to(device)
             xb, yb = _sanitize_batch(xb, yb)

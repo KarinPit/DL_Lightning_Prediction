@@ -10,9 +10,9 @@ RUN_CONFIG = RunConfig(
 
 MODEL_CONFIG = ModelConfig(
     learning_rate=0.001,
-    pos_weight=5000.0,
+    pos_weight=1000.0,
     num_epochs=10,
-    batch_size=50,
+    batch_size=8,
     decision_threshold=0.7,
     clip_after_normalization=True,
     normalization_clip_value=4.0,
@@ -21,10 +21,14 @@ MODEL_CONFIG = ModelConfig(
 )
 
 CASE_CONFIG = CaseConfig(
-    train_cases=CASES[:5],
+    train_cases=[
+        CASES[5]
+    ],  # case names must be in a list, even if there is only one item
+    # train_cases=CASES[:5],
     val_cases=[],
     test_cases=[],
-    tensor_dataset_name="train_cases_1_to_5",
+    tensor_dataset_name=CASES[5],
+    # tensor_dataset_name="train_cases_1_to_5",
     atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE"],
     # atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE", "FLUX_PROD", "WDIAG"],
     with_subparams={"WDIAG": ["wmax_layer", "mflux_mean_layer", "wplus_mean_layer"]},

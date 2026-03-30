@@ -94,3 +94,37 @@ class UNet(nn.Module):
 
         logits = self.outc(x)
         return logits
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2, alpha=0.25):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+
+    def forward(self, logits, targets):
+        bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+        p_t = torch.exp(-bce)
+        loss = self.alpha * (1 - p_t) ** self.gamma * bce
+        return loss.mean()
+
+
+class GaussianSmoothing(nn.Module):
+    def __init__(self, kernel_size=3, sigma=1.0):
+        super().__init__()
+        self.padding = kernel_size // 2
+
+        # Build the Gaussian kernel
+        coords = torch.arange(kernel_size).float() - kernel_size // 2
+        grid_y, grid_x = torch.meshgrid(coords, coords, indexing="ij")
+        kernel = torch.exp(-(grid_x**2 + grid_y**2) / (2 * sigma**2))
+        kernel = kernel / kernel.sum()
+
+        # Shape it for conv2d: (out_channels, in_channels, H, W)
+        kernel = kernel.view(1, 1, kernel_size, kernel_size)
+
+        # Register as buffer — fixed, not trainable, moves to GPU with .to(device)
+        self.register_buffer("weight", kernel)
+
+    def forward(self, x):
+        return F.conv2d(x.float(), self.weight, padding=self.padding)

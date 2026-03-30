@@ -120,10 +120,9 @@ def build_and_save_tensors(
     expected_channels = case_config.expected_input_channels
 
     for case in case_config.train_case_names:
+        print("CASE LOOP", case)
         case_wrf_path = os.path.join(MAIN_PATH, case, "Ens", "Raw")
-        case_entln_path = os.path.join(
-            MAIN_PATH, case, "ENTLN", space_res, time_res
-        )
+        case_entln_path = os.path.join(MAIN_PATH, case, "ENTLN", space_res, time_res)
 
         # Loop over the files in the ENTLN folder and extract all existing timestamps
         entln_map = {}

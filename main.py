@@ -9,7 +9,7 @@ from torch.utils.data import TensorDataset, Subset, DataLoader
 from config.constants import MAIN_PATH
 from config.experiment import CASE_CONFIG, MODEL_CONFIG, RUN_CONFIG
 from data.preprocessing import build_and_save_tensors, mean_std_norm
-from models.unet import UNet
+from models.unet import UNet, FocalLoss, GaussianSmoothing
 from training.train import train_model
 from training.visualization import (
     inspect_probability_maps,
@@ -174,6 +174,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pos_weight = torch.tensor([model_config.pos_weight]).to(device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    # criterion = FocalLoss()
 
     # check if case tensors exist
     tensors_exist = False
@@ -256,6 +257,10 @@ if __name__ == "__main__":
 
         if model_config.clip_after_normalization:
             X = clip_normalized_tensor(X, model_config.normalization_clip_value)
+
+        # # create a gaussian smoothing to y before training
+        # smoother = GaussianSmoothing(kernel_size=3, sigma=1)
+        # y_smooth = smoother(y)
 
         save_tensor_stats_report(
             X=X,
