@@ -37,18 +37,28 @@ class Down(nn.Module):
 class Up(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, use_attention=False):
         super().__init__()
         self.up = nn.ConvTranspose2d(
             in_channels, in_channels // 2, kernel_size=2, stride=2
         )
         self.conv = DoubleConv(in_channels, out_channels)
+        self.attention = (
+            AttentionGate(
+                F_g=in_channels // 2, F_l=in_channels // 2, F_int=in_channels // 4
+            )
+            if use_attention
+            else None
+        )
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
 
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
+
+        if self.attention:
+            x2 = self.attention(g=x1, x=x2)  # gate with decoder, attend encoder
 
         # if a pixel is missing (creating a size mismatch) - fix by padding
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
@@ -70,10 +80,10 @@ class UNet(nn.Module):
         self.down4 = Down(512, 1024)  # Bottleneck
 
         # Decoder (Up sampling)
-        self.up1 = Up(1024, 512)
-        self.up2 = Up(512, 256)
-        self.up3 = Up(256, 128)
-        self.up4 = Up(128, 64)
+        self.up1 = Up(1024, 512, use_attention=True)
+        self.up2 = Up(512, 256, use_attention=True)
+        self.up3 = Up(256, 128, use_attention=True)
+        self.up4 = Up(128, 64, use_attention=False)
 
         # output layer
         self.outc = nn.Conv2d(64, n_classes, kernel_size=1)
@@ -128,3 +138,32 @@ class GaussianSmoothing(nn.Module):
 
     def forward(self, x):
         return F.conv2d(x.float(), self.weight, padding=self.padding)
+
+
+class AttentionGate(nn.Module):
+    def __init__(self, F_g, F_l, F_int):
+        """
+        F_g:   channels from decoder (gate signal)
+        F_l:   channels from encoder (skip connection)
+        F_int: intermediate channels
+        """
+        super().__init__()
+        self.W_g = nn.Sequential(
+            nn.Conv2d(F_g, F_int, kernel_size=1), nn.BatchNorm2d(F_int)
+        )
+        self.W_x = nn.Sequential(
+            nn.Conv2d(F_l, F_int, kernel_size=1), nn.BatchNorm2d(F_int)
+        )
+        self.psi = nn.Sequential(
+            nn.Conv2d(F_int, 1, kernel_size=1), nn.BatchNorm2d(1), nn.Sigmoid()
+        )
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, g, x):
+        g1 = self.W_g(g)
+        x1 = self.W_x(x)
+        # upsample g to match x spatial size
+        g1 = F.interpolate(g1, size=x1.shape[2:], mode="bilinear", align_corners=True)
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)  # spatial attention map
+        return x * psi  # attended skip features
