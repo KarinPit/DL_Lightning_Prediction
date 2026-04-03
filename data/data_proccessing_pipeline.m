@@ -4,27 +4,42 @@
 %  - Process MODEL (LPI/KI), ILDN, ENTLN into interval NetCDFs
 %  - Keep ensemble members separated in MODEL outputs
 %  - Run over all configured variables
+%  - Loops over all cases automatically
 %  Karin Pitlik
 %  ===========================
+
+%% -------- CASES TO PROCESS --------
+cases = {
+    'Case1_Nov_2022_23_25',
+    'Case2_Jan_2023_11_16',
+    'Case3_Mar_2023_13_15',
+    'Case4_Apr_2023_09_13',
+    'Case5_Jan_2024_26_31',
+    'Case6_Nov_2025_24_25'
+};
+
+for case_idx = 1:numel(cases)
 
 %% -------- USER CONFIG --------
 cfg = struct();
 
-% Case / variables
-cfg.case_name = 'Case5_Jan_2024_26_31';
+cfg.case_name = cases{case_idx};
+fprintf('\n\n========================================\n');
+fprintf('PROCESSING CASE %d/%d: %s\n', case_idx, numel(cases), cfg.case_name);
+fprintf('========================================\n');
+
 % cfg.variable_types = {'lpi', 'KI', 'ds', 'wdiag', 'flux_prod', 'prec_rate', 'cape2d'};
-cfg.variable_types = {'lpi', 'KI', 'ds', 'prec_rate', 'cape2d'}; %'lpi', 'KI', 'ds', 'wmax_layer', 'flux_up', 'prec_rate', 'cape2d'
+cfg.variable_types = {'lpi', 'KI', 'ds', 'prec_rate', 'cape2d'};
 cfg.sub_variables = containers.Map;
 cfg.sub_variables('wdiag') = {'wmax_layer', 'mflux_mean_layer', 'wplus_mean_layer'};
 
-% Time settings
-cfg.loop_start_date = datetime('2024-01-26_00:00:00','InputFormat','yyyy-MM-dd_HH:mm:ss');
-cfg.loop_end_date   = datetime('2024-02-01_00:00:00','InputFormat','yyyy-MM-dd_HH:mm:ss');
-cfg.interval_hours  = 1;
+% Auto-parse dates from case name
+[cfg.loop_start_date, cfg.loop_end_date] = parse_case_dates(cfg.case_name);
+fprintf('Date range: %s --> %s\n', datestr(cfg.loop_start_date), datestr(cfg.loop_end_date));
 
-% Spatial settings
-cfg.resolution_km = 4;   % supported: 4, 12, 24, 40, 80
-cfg.relevant_lat  = 32;
+cfg.interval_hours  = 1;
+cfg.resolution_km   = 4;   % supported: 4, 12, 24, 40, 80
+cfg.relevant_lat    = 32;
 
 % Geographic filter
 cfg.min_lat = 27.296;
@@ -44,21 +59,16 @@ cfg.bin_width_lon = cfg.resolution_km / (111.32 * cosd(cfg.relevant_lat));
 cfg.grid_label    = grid_lbl(cfg.resolution_km);
 
 %% -------- Paths --------
-cfg.main_path = '/Users/karinpitlik/Desktop/DataScience/Thesis';
+cfg.main_path = '/home/ubuntu/Desktop/';
 
-cfg.coords_folder_path = sprintf('%s/NetCDF/Other/lpi_4km_output_2022-01_24_27/', cfg.main_path);
+cfg.coords_folder_path = sprintf('%s/local_raw_data', cfg.main_path);
 cfg.coords_file_path   = fullfile(cfg.coords_folder_path, 'lpi_4km_output_2022-01-24_00_10_00.nc');
 
-cfg.ildn_mat_path  = sprintf('%s/ILDN/Cases_Mats/ILDN_%s.mat', cfg.main_path, cfg.case_name);
-cfg.entln_mat_path = sprintf('%s/ENTLN/Pulse_Cases_Mats/ENTLN_pulse_%s.mat', cfg.main_path, cfg.case_name);
+cfg.entln_mat_path = sprintf('%s/local_raw_data/ENTLN/ENTLN_pulse_%s.mat', cfg.main_path, cfg.case_name);
 
-cfg.ildn_out_root = sprintf('%s/ILDN/ILDN_%s/%s/%s/', ...
+cfg.entln_out_root = sprintf('%s/local_processed_data/%s/ENTLN/%s/%s/', ...
     cfg.main_path, cfg.case_name, cfg.grid_label, cfg.interval_name);
 
-cfg.entln_out_root = sprintf('%s/%s/ENTLN/%s/%s/', ...
-    cfg.main_path, cfg.case_name, cfg.grid_label, cfg.interval_name);
-
-mkif(cfg.ildn_out_root);
 mkif(cfg.entln_out_root);
 
 %% -------- Prepare coarse grid from reference coordinates --------
@@ -130,6 +140,11 @@ for v = 1:numel(cfg.variable_types)
     end
 end
 
+fprintf('\nFinished case: %s\n', cfg.case_name);
+
+end % end case loop
+fprintf('\n\nAll cases processed!\n');
+
 %% ===========================
 %           FUNCTIONS
 % ===========================
@@ -186,14 +201,16 @@ function var_cfg = prepare_variable_config(cfg, variable_type, current_var)
     end
 
     % Folder still comes from variable_type
-    var_cfg.model_raw_folder = sprintf('%s/%s/Ens/Raw/%s/', ...
+    var_cfg.model_raw_folder = sprintf('%s/local_raw_data/%s/Ens/Raw/%s/', ...
         var_cfg.main_path, var_cfg.case_name, var_cfg.variable_type_upper);
 
     % Save outputs under the actual variable name
-    var_cfg.model_out_root = sprintf('%s/proccesed/%s/%s/%s/', ...
-        var_cfg.model_raw_folder, lower(current_var), var_cfg.grid_label, var_cfg.interval_name);
+    var_cfg.model_out_root = sprintf('%s/local_processed_data/%s/%s/%s/%s/', ...
+        var_cfg.main_path, var_cfg.case_name, var_cfg.variable_type_upper, var_cfg.grid_label, var_cfg.interval_name);
 
-    var_cfg.fig_output_dir = sprintf('%s/%s/Ens/Graphs/%s/%s/%s/', ...
+    disp(var_cfg.model_out_root);
+
+    var_cfg.fig_output_dir = sprintf('%s/local_processed_data/Graphs/%s/%s/%s/%s/', ...
         var_cfg.main_path, var_cfg.case_name, upper(current_var), ...
         var_cfg.grid_label, var_cfg.interval_name);
 end
@@ -528,4 +545,20 @@ function mkif(pth)
     if ~exist(pth,'dir')
         mkdir(pth);
     end
+end
+
+function [start_date, end_date] = parse_case_dates(case_name)
+    % Format: CaseN_Mon_YYYY_DD1_DD2
+    % e.g. Case5_Jan_2024_26_31 -> start: 2024-01-26, end: 2024-02-01
+    parts = strsplit(case_name, '_');
+    month_str = parts{2};
+    year      = str2double(parts{3});
+    day_start = str2double(parts{4});
+    day_end   = str2double(parts{5});
+
+    month_names = {'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'};
+    month_num = find(strcmpi(month_names, month_str));
+
+    start_date = datetime(year, month_num, day_start, 0, 0, 0);
+    end_date   = datetime(year, month_num, day_end,   0, 0, 0) + days(1);
 end
