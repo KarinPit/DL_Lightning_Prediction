@@ -1,4 +1,4 @@
-MAIN_PATH = "/Users/karinpitlik/Desktop/DataScience/Thesis"
+MAIN_PATH = "/home/ec2-user/Processed_Data"
 
 CASES = [
     "Case1_Nov_2022_23_25",

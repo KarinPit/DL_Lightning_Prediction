@@ -121,7 +121,7 @@ def build_and_save_tensors(
 
     for case in case_config.train_case_names:
         print("CASE LOOP", case)
-        case_wrf_path = os.path.join(MAIN_PATH, case, "Ens", "Raw")
+        case_wrf_path = os.path.join(MAIN_PATH, case)
         case_entln_path = os.path.join(MAIN_PATH, case, "ENTLN", space_res, time_res)
 
         # Loop over the files in the ENTLN folder and extract all existing timestamps
@@ -143,9 +143,7 @@ def build_and_save_tensors(
             current_param_keys = None
 
             for source_name in source_names:
-                data_folder = os.path.join(
-                    case_wrf_path, param, "proccesed", source_name, space_res, time_res
-                )
+                data_folder = os.path.join(case_wrf_path, param, space_res, time_res)
                 if not os.path.exists(data_folder):
                     raise FileNotFoundError(
                         f"Missing data folder for parameter '{param}' in case "
