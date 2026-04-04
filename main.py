@@ -283,6 +283,9 @@ if __name__ == "__main__":
         # smoother = GaussianSmoothing(kernel_size=3, sigma=1)
         # y_smooth = smoother(y)
 
+        print(X.shape)  # should be (N_samples, N_channels, H, W)
+        print(y.shape)
+
         save_tensor_stats_report(
             X=X,
             y=y,
