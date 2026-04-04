@@ -10,12 +10,12 @@
 
 %% -------- CASES TO PROCESS --------
 cases = {
-    'Case1_Nov_2022_23_25',
-    'Case2_Jan_2023_11_16',
-    'Case3_Mar_2023_13_15',
-    'Case4_Apr_2023_09_13',
-    'Case5_Jan_2024_26_31',
-    % 'Case6_Nov_2025_24_25'
+    % 'Case1_Nov_2022_23_25',
+    % 'Case2_Jan_2023_11_16',
+    % 'Case3_Mar_2023_13_15',
+    % 'Case4_Apr_2023_09_13',
+    % 'Case5_Jan_2024_26_31',
+    'Case6_Nov_2025_24_25'
 };
 
 for case_idx = 1:numel(cases)
@@ -28,10 +28,7 @@ fprintf('\n\n========================================\n');
 fprintf('PROCESSING CASE %d/%d: %s\n', case_idx, numel(cases), cfg.case_name);
 fprintf('========================================\n');
 
-cfg.variable_types = {'lpi', 'KI', 'ds', 'prec_rate', 'cape2d'};
-% cfg.variable_types = {'lpi', 'KI', 'ds', 'prec_rate', 'cape2d','flux_prod','wdiag'};
-% cfg.variable_types = {'wdiag'};
-
+cfg.variable_types = {'lpi', 'KI', 'ds', 'prec_rate', 'cape2d','flux_prod',''};
 cfg.sub_variables = containers.Map;
 cfg.sub_variables('wdiag') = {'wmax_layer', 'mflux_mean_layer', 'wplus_mean_layer'};
 
@@ -40,7 +37,7 @@ cfg.sub_variables('wdiag') = {'wmax_layer', 'mflux_mean_layer', 'wplus_mean_laye
 fprintf('Date range: %s --> %s\n', datestr(cfg.loop_start_date), datestr(cfg.loop_end_date));
 
 cfg.interval_hours  = 1;
-cfg.resolution_km   = 80;
+cfg.resolution_km   = 12;
 cfg.relevant_lat    = 32;
 
 cfg.min_lat = 27.296;
@@ -200,11 +197,8 @@ function var_cfg = prepare_variable_config(cfg, variable_type, current_var)
     var_cfg.model_raw_folder = sprintf('%s/local_raw_data/%s/Ens/Raw/%s/', ...
         var_cfg.main_path, var_cfg.case_name, var_cfg.variable_type_upper);
 
-    % var_cfg.model_out_root = sprintf('%s/local_processed_data/%s/%s/%s/%s/', ...
-    %     var_cfg.main_path, var_cfg.case_name, var_cfg.variable_type_upper, var_cfg.grid_label, var_cfg.interval_name);
-
     var_cfg.model_out_root = sprintf('%s/local_processed_data/%s/%s/%s/%s/', ...
-    var_cfg.main_path, var_cfg.case_name, upper(current_var), var_cfg.grid_label, var_cfg.interval_name);
+        var_cfg.main_path, var_cfg.case_name, var_cfg.variable_type_upper, var_cfg.grid_label, var_cfg.interval_name);
 
     disp(var_cfg.model_out_root);
 
@@ -535,7 +529,7 @@ function [start_date, end_date] = parse_case_dates(case_name)
     day_end   = str2double(parts{5});
 
     month_names = {'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'};
-    month_num = find(strcmpi(month_names, month_str)); 
+    month_num = find(strcmpi(month_names, month_str));
 
     start_date = datetime(year, month_num, day_start, 0, 0, 0);
     end_date   = datetime(year, month_num, day_end,   0, 0, 0) + days(1);
