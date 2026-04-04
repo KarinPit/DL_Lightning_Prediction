@@ -46,7 +46,7 @@ def load_nc_layer(file_path, variable_name):
     target_var = next(
         (var for var in ds.variables if var.lower() == variable_name.lower()), None
     )
-
+    
     # if variable name is not found, the ds is closed
     if target_var is None:
         ds.close()
@@ -120,9 +120,8 @@ def build_and_save_tensors(
     expected_channels = case_config.expected_input_channels
 
     for case in case_config.train_case_names:
-        print("CASE LOOP", case)
-        case_wrf_path = os.path.join(MAIN_PATH, case)
-        case_entln_path = os.path.join(MAIN_PATH, case, "ENTLN", space_res, time_res)
+        case_wrf_path = os.path.join(MAIN_PATH,'Processed_Data', case)
+        case_entln_path = os.path.join(MAIN_PATH,'Processed_Data', case, "ENTLN", space_res, time_res)
 
         # Loop over the files in the ENTLN folder and extract all existing timestamps
         entln_map = {}
@@ -182,7 +181,7 @@ def build_and_save_tensors(
 
         all_keys_sets = all_param_times + [set(entln_map.keys())]
         common_timestamps = set.intersection(*all_keys_sets)
-        print(f"Found {len(common_timestamps)} common timestamps for case '{case}'.")
+        print(f"Found {len(common_timestamps)} common timestamps for case '{case}'.\n")
 
         for ts in tqdm(sorted(common_timestamps), desc=case):
             for ens_id in ens_list:

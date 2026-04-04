@@ -133,6 +133,7 @@ def train_model(
     num_epochs,
     device,
     decision_threshold=0.5,
+    scheduler= None
 ):
     """
     Train the model and track epoch-level metrics.
@@ -225,6 +226,10 @@ def train_model(
             decision_threshold=decision_threshold,
         )
 
+        # Step scheduler based on val CSI
+        if scheduler is not None:
+            scheduler.step(val_metrics["csi"])
+
         # Store history
         history["train_loss"].append(avg_train_loss)
         history["val_loss"].append(val_metrics["loss"])
@@ -263,5 +268,6 @@ def train_model(
         print(
             f"            Train BSS: {avg_train_bss:.4f} | Val BSS: {val_metrics['bss']:.4f}"
         )
+    
 
     return history

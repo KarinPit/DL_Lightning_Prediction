@@ -152,11 +152,13 @@ if __name__ == "__main__":
     experiment_tag = get_experiment_tag(run_config.use_seed, run_config.seed_value)
     tensor_path = os.path.join(
         MAIN_PATH,
+        'thesis-bucket',
+        'Processed_Data',
         case_config.tensor_dataset_name,
-        "Ens",
         "Tensors",
         case_config.space_res,
     )
+
     weights_save_path = os.path.join(tensor_path, f"unet_weights_{experiment_tag}.pth")
 
     if run_config.use_seed:
@@ -169,7 +171,7 @@ if __name__ == "__main__":
                 "Evaluation-only mode without a seed is not reliable. "
                 "Set use_seed=True so the validation split matches the saved weights."
             )
-
+ 
     # DL model configuration
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pos_weight = torch.tensor([model_config.pos_weight]).to(device)
@@ -208,6 +210,7 @@ if __name__ == "__main__":
 
         model = UNet(n_channels=X.shape[1], n_classes=1).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=model_config.learning_rate)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
 
         # get indices of training and validation datasets after splitting
         train_loader_generator = None
@@ -284,6 +287,14 @@ if __name__ == "__main__":
             shuffle=False,
         )
 
+        # Check ratio between number of lightning and number of total pixels
+        total_pixels = 0
+        total_lightning = 0
+        for X, y in train_loader:
+            total_pixels += y.numel()
+            total_lightning += y.sum().item()
+        print(f"Ratio: {total_pixels/total_lightning:.1f}\n")
+
         if run_config.to_train:
             # run train and evaluation
             history = train_model(
@@ -295,6 +306,7 @@ if __name__ == "__main__":
                 num_epochs=model_config.num_epochs,
                 device=device,
                 decision_threshold=model_config.decision_threshold,  # change threshold.
+                scheduler=scheduler
             )
             # save the model's state for future runs
             torch.save(model.state_dict(), weights_save_path)

@@ -1,4 +1,4 @@
-MAIN_PATH = "/home/ec2-user/Processed_Data"
+MAIN_PATH = "/home/ec2-user/"
 
 CASES = [
     "Case1_Nov_2022_23_25",

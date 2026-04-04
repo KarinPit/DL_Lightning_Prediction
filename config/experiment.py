@@ -10,8 +10,8 @@ RUN_CONFIG = RunConfig(
 
 MODEL_CONFIG = ModelConfig(
     learning_rate=0.001,
-    pos_weight=1000.0,
-    num_epochs=10,
+    pos_weight=70.0,
+    num_epochs=20,
     batch_size=8,
     decision_threshold=0.7,
     clip_after_normalization=True,
@@ -21,17 +21,16 @@ MODEL_CONFIG = ModelConfig(
 )
 
 CASE_CONFIG = CaseConfig(
-    train_cases=[
-        CASES[5]
-    ],  # case names must be in a list, even if there is only one item
+    train_cases=[CASES[5]],  # case names must be in a list, even if there is only one item
     # train_cases=CASES[:5],
     val_cases=[],
     test_cases=[],
     tensor_dataset_name=CASES[5],
     # tensor_dataset_name="train_cases_1_to_5",
-    atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE"],
-    # atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE", "FLUX_PROD", "WDIAG"],
-    with_subparams={"WDIAG": ["wmax_layer", "mflux_mean_layer", "wplus_mean_layer"]},
+    # atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE"],
+    atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE", "FLUX_PROD", "WMAX_LAYER", "MFLUX_MEAN_LAYER", "WPLUS_MEAN_LAYER"],
+    with_subparams={"WDIAG": ["wplus_mean_layer"]},
+    # with_subparams={"WDIAG": ["wmax_layer", "mflux_mean_layer", "wplus_mean_layer"]},
     space_res="4by4",
     time_res="1_hours",
     min_lat=27.296,
