@@ -225,7 +225,7 @@ def build_and_save_tensors(
                             all_y_samples.append(y_tensor.unsqueeze(0))
                             sample_groups.append(f"{case}__{ts}")
 
-    print(f"Total X samples: {len(all_x_samples)}")
+    print(f"Total WRF samples: {len(all_x_samples)}")
 
     if len(all_x_samples) == 0:
         print(
@@ -245,5 +245,82 @@ def build_and_save_tensors(
 
     torch.save(final_x_tensor, os.path.join(tensor_path, "X_final.pt"))
     torch.save(final_y_tensor, os.path.join(tensor_path, "Y_final.pt"))
+    torch.save(sample_groups, os.path.join(tensor_path, "sample_groups.pt"))
+    return True
+
+
+def build_and_save_tensors_era5(tensor_path, atm_params, case_config):
+    """
+    Build input/target tensors from ERA5 processed NC files.
+
+    Each hourly NC file contains all ERA5 variables + entln_count on the same grid.
+    No ensemble members — ERA5 is a single reanalysis.
+
+    Expected file path:
+        thesis-bucket/Processed_Data/ERA5/{case}/1_hours/{timestamp}.nc
+    """
+    all_x_samples = []
+    all_y_samples = []
+    sample_groups = []
+
+    era5_base = os.path.join(MAIN_PATH, 'thesis-bucket', 'Processed_Data', 'ERA5')
+
+    for case in case_config.train_case_names:
+        case_era5_path = os.path.join(era5_base, case, case_config.time_res)
+
+        if not os.path.exists(case_era5_path):
+            print(f"WARNING: ERA5 folder not found for {case}: {case_era5_path}")
+            continue
+
+        files = sorted([f for f in os.listdir(case_era5_path) if f.endswith('.nc')])
+        print(f"Case {case}: found {len(files)} hourly ERA5 files")
+
+        for fname in tqdm(files, desc=case):
+            fpath = os.path.join(case_era5_path, fname)
+
+            # Load all selected ERA5 atmospheric variables
+            current_tensors = []
+            valid = True
+            for param in atm_params:
+                tensor = load_nc_layer(fpath, param)
+                if tensor is None:
+                    print(f"  Missing variable '{param}' in {fname} — skipping")
+                    valid = False
+                    break
+                current_tensors.append(tensor)
+
+            if not valid or len(current_tensors) != len(atm_params):
+                continue
+
+            # Load ENTLN target and binarize (any pulse in cell = 1)
+            y_tensor = load_nc_layer(fpath, 'entln_count')
+            if y_tensor is None:
+                continue
+            y_binary = (y_tensor > 0).float()
+
+            # Extract timestamp from filename for group-aware splitting
+            ts_match = re.search(r'(\d{4}-\d{2}-\d{2}_\d{2}_\d{2}_\d{2})', fname)
+            ts = ts_match.group(1) if ts_match else fname
+
+            x_tensor = torch.stack(current_tensors, dim=0)
+            all_x_samples.append(x_tensor)
+            all_y_samples.append(y_binary.unsqueeze(0))
+            sample_groups.append(f"{case}__{ts}")
+
+    print(f"Total ERA5 samples: {len(all_x_samples)}")
+
+    if len(all_x_samples) == 0:
+        print("No samples created. Check ERA5 processed files exist and variable names match.")
+        return False
+
+    final_x = torch.stack(all_x_samples, dim=0)
+    final_y = torch.stack(all_y_samples, dim=0)
+
+    print(f"Final X shape: {final_x.shape}")
+    print(f"Final Y shape: {final_y.shape}")
+
+    os.makedirs(tensor_path, exist_ok=True)
+    torch.save(final_x, os.path.join(tensor_path, "X_final.pt"))
+    torch.save(final_y, os.path.join(tensor_path, "Y_final.pt"))
     torch.save(sample_groups, os.path.join(tensor_path, "sample_groups.pt"))
     return True

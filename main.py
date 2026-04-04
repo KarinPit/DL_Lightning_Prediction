@@ -8,7 +8,7 @@ from torch.utils.data import TensorDataset, Subset, DataLoader
 
 from config.constants import MAIN_PATH
 from config.experiment import CASE_CONFIG, MODEL_CONFIG, RUN_CONFIG
-from data.preprocessing import build_and_save_tensors, mean_std_norm
+from data.preprocessing import build_and_save_tensors, build_and_save_tensors_era5, mean_std_norm
 from models.unet import UNet, FocalLoss, GaussianSmoothing
 from training.train import train_model
 from training.visualization import (
@@ -150,14 +150,25 @@ if __name__ == "__main__":
 
     # paths configuration
     experiment_tag = get_experiment_tag(run_config.use_seed, run_config.seed_value)
-    tensor_path = os.path.join(
-        MAIN_PATH,
-        'thesis-bucket',
-        'Processed_Data',
-        case_config.tensor_dataset_name,
-        "Tensors",
-        case_config.space_res,
-    )
+
+    if case_config.data_source == "era5":
+        tensor_path = os.path.join(
+            MAIN_PATH,
+            'thesis-bucket',
+            'Processed_Data',
+            'ERA5',
+            case_config.tensor_dataset_name,
+            "Tensors",
+        )
+    else:
+        tensor_path = os.path.join(
+            MAIN_PATH,
+            'thesis-bucket',
+            'Processed_Data',
+            case_config.tensor_dataset_name,
+            "Tensors",
+            case_config.space_res,
+        )
 
     weights_save_path = os.path.join(tensor_path, f"unet_weights_{experiment_tag}.pth")
 
@@ -197,15 +208,22 @@ if __name__ == "__main__":
                 f"Expected {case_config.expected_input_channels} input channels from atm_params, "
                 f"but found {X.shape[1]} in X_final.pt. Rebuilding tensors."
             )
-            build_and_save_tensors(
-                wrf_path=None,
-                entln_path=None,
-                tensor_path=tensor_path,
-                atm_params=case_config.atm_params,
-                space_res=case_config.space_res,
-                time_res=case_config.time_res,
-                case_config=case_config,
-            )
+            if case_config.data_source == "era5":
+                build_and_save_tensors_era5(
+                    tensor_path=tensor_path,
+                    atm_params=case_config.atm_params,
+                    case_config=case_config,
+                )
+            else:
+                build_and_save_tensors(
+                    wrf_path=None,
+                    entln_path=None,
+                    tensor_path=tensor_path,
+                    atm_params=case_config.atm_params,
+                    space_res=case_config.space_res,
+                    time_res=case_config.time_res,
+                    case_config=case_config,
+                )
             X, y, sample_groups = load_saved_tensors(tensor_path)
 
         model = UNet(n_channels=X.shape[1], n_classes=1).to(device)
@@ -372,12 +390,19 @@ if __name__ == "__main__":
                 )
 
     else:
-        build_and_save_tensors(
-            wrf_path=None,
-            entln_path=None,
-            tensor_path=tensor_path,
-            atm_params=case_config.atm_params,
-            space_res=case_config.space_res,
-            time_res=case_config.time_res,
-            case_config=case_config,
-        )
+        if case_config.data_source == "era5":
+            build_and_save_tensors_era5(
+                tensor_path=tensor_path,
+                atm_params=case_config.atm_params,
+                case_config=case_config,
+            )
+        else:
+            build_and_save_tensors(
+                wrf_path=None,
+                entln_path=None,
+                tensor_path=tensor_path,
+                atm_params=case_config.atm_params,
+                space_res=case_config.space_res,
+                time_res=case_config.time_res,
+                case_config=case_config,
+            )

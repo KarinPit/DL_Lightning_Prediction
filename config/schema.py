@@ -39,6 +39,7 @@ class CaseConfig:
     max_lat: int = 36.598
     min_lon: int = 27.954
     max_lon: int = 39.292
+    data_source: str = "wrf"   # "wrf" or "era5"
 
     def _flatten_case_names(self, cases):
         flat_cases = []
