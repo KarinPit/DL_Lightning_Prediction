@@ -10,8 +10,8 @@ RUN_CONFIG = RunConfig(
 
 MODEL_CONFIG = ModelConfig(
     learning_rate=0.001,
-    pos_weight=1000.0,
-    num_epochs=10,
+    pos_weight=70.0,
+    num_epochs=20,
     batch_size=8,
     decision_threshold=0.7,
     clip_after_normalization=True,
@@ -20,22 +20,40 @@ MODEL_CONFIG = ModelConfig(
     visualization_thresholds=[0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0],
 )
 
-CASE_CONFIG = CaseConfig(
-    train_cases=[
-        CASES[5]
-    ],  # case names must be in a list, even if there is only one item
-    # train_cases=CASES[:5],
+# ── WRF config (original) ──────────────────────────────────────────────────
+WRF_CASE_CONFIG = CaseConfig(
+    train_cases=CASES[:5],
     val_cases=[],
     test_cases=[],
-    tensor_dataset_name=CASES[5],
-    # tensor_dataset_name="train_cases_1_to_5",
+    tensor_dataset_name="train_cases_1_to_5",
     atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE"],
-    # atm_params=["KI", "CAPE2D", "LPI", "PREC_RATE", "FLUX_PROD", "WDIAG"],
-    with_subparams={"WDIAG": ["wmax_layer", "mflux_mean_layer", "wplus_mean_layer"]},
-    space_res="4by4",
+    with_subparams={},
+    space_res="24by24",
     time_res="1_hours",
     min_lat=27.296,
     max_lat=36.598,
     min_lon=27.954,
     max_lon=39.292,
+    data_source="wrf",
 )
+
+# ── ERA5 config ────────────────────────────────────────────────────────────
+ERA5_CASE_CONFIG = CaseConfig(
+    train_cases=CASES[:5],
+    val_cases=[],
+    test_cases=[],
+    tensor_dataset_name="ERA5_train_cases_1_to_5",
+    # ERA5 variable short names (must match what's in the NC files)
+    atm_params=["cape", "kx", "tciw", "d2m", "tcwv", "crr", "msl", "t2m", "hcc"],
+    with_subparams={},
+    space_res="era5",       # ERA5 is on ~28km grid
+    time_res="1_hours",
+    min_lat=27.296,
+    max_lat=36.598,
+    min_lon=27.954,
+    max_lon=39.292,
+    data_source="era5",
+)
+
+# ── Active config — switch here ────────────────────────────────────────────
+CASE_CONFIG = ERA5_CASE_CONFIG   # ← change to WRF_CASE_CONFIG to go back to WRF

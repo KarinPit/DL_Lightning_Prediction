@@ -8,7 +8,7 @@ from torch.utils.data import TensorDataset, Subset, DataLoader
 
 from config.constants import MAIN_PATH
 from config.experiment import CASE_CONFIG, MODEL_CONFIG, RUN_CONFIG
-from data.preprocessing import build_and_save_tensors, mean_std_norm
+from data.preprocessing import build_and_save_tensors, build_and_save_tensors_era5, mean_std_norm
 from models.unet import UNet, FocalLoss, GaussianSmoothing
 from training.train import train_model
 from training.visualization import (
@@ -150,13 +150,26 @@ if __name__ == "__main__":
 
     # paths configuration
     experiment_tag = get_experiment_tag(run_config.use_seed, run_config.seed_value)
-    tensor_path = os.path.join(
-        MAIN_PATH,
-        case_config.tensor_dataset_name,
-        "Ens",
-        "Tensors",
-        case_config.space_res,
-    )
+
+    if case_config.data_source == "era5":
+        tensor_path = os.path.join(
+            MAIN_PATH,
+            'thesis-bucket',
+            'Processed_Data',
+            'ERA5',
+            case_config.tensor_dataset_name,
+            "Tensors",
+        )
+    else:
+        tensor_path = os.path.join(
+            MAIN_PATH,
+            'thesis-bucket',
+            'Processed_Data',
+            case_config.tensor_dataset_name,
+            "Tensors",
+            case_config.space_res,
+        )
+
     weights_save_path = os.path.join(tensor_path, f"unet_weights_{experiment_tag}.pth")
 
     if run_config.use_seed:
@@ -169,7 +182,7 @@ if __name__ == "__main__":
                 "Evaluation-only mode without a seed is not reliable. "
                 "Set use_seed=True so the validation split matches the saved weights."
             )
-
+ 
     # DL model configuration
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pos_weight = torch.tensor([model_config.pos_weight]).to(device)
@@ -195,19 +208,27 @@ if __name__ == "__main__":
                 f"Expected {case_config.expected_input_channels} input channels from atm_params, "
                 f"but found {X.shape[1]} in X_final.pt. Rebuilding tensors."
             )
-            build_and_save_tensors(
-                wrf_path=None,
-                entln_path=None,
-                tensor_path=tensor_path,
-                atm_params=case_config.atm_params,
-                space_res=case_config.space_res,
-                time_res=case_config.time_res,
-                case_config=case_config,
-            )
+            if case_config.data_source == "era5":
+                build_and_save_tensors_era5(
+                    tensor_path=tensor_path,
+                    atm_params=case_config.atm_params,
+                    case_config=case_config,
+                )
+            else:
+                build_and_save_tensors(
+                    wrf_path=None,
+                    entln_path=None,
+                    tensor_path=tensor_path,
+                    atm_params=case_config.atm_params,
+                    space_res=case_config.space_res,
+                    time_res=case_config.time_res,
+                    case_config=case_config,
+                )
             X, y, sample_groups = load_saved_tensors(tensor_path)
 
         model = UNet(n_channels=X.shape[1], n_classes=1).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=model_config.learning_rate)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
 
         # get indices of training and validation datasets after splitting
         train_loader_generator = None
@@ -284,6 +305,14 @@ if __name__ == "__main__":
             shuffle=False,
         )
 
+        # Check ratio between number of lightning and number of total pixels
+        total_pixels = 0
+        total_lightning = 0
+        for X, y in train_loader:
+            total_pixels += y.numel()
+            total_lightning += y.sum().item()
+        print(f"Ratio: {total_pixels/total_lightning:.1f}\n")
+
         if run_config.to_train:
             # run train and evaluation
             history = train_model(
@@ -295,6 +324,7 @@ if __name__ == "__main__":
                 num_epochs=model_config.num_epochs,
                 device=device,
                 decision_threshold=model_config.decision_threshold,  # change threshold.
+                scheduler=scheduler
             )
             # save the model's state for future runs
             torch.save(model.state_dict(), weights_save_path)
@@ -360,12 +390,19 @@ if __name__ == "__main__":
                 )
 
     else:
-        build_and_save_tensors(
-            wrf_path=None,
-            entln_path=None,
-            tensor_path=tensor_path,
-            atm_params=case_config.atm_params,
-            space_res=case_config.space_res,
-            time_res=case_config.time_res,
-            case_config=case_config,
-        )
+        if case_config.data_source == "era5":
+            build_and_save_tensors_era5(
+                tensor_path=tensor_path,
+                atm_params=case_config.atm_params,
+                case_config=case_config,
+            )
+        else:
+            build_and_save_tensors(
+                wrf_path=None,
+                entln_path=None,
+                tensor_path=tensor_path,
+                atm_params=case_config.atm_params,
+                space_res=case_config.space_res,
+                time_res=case_config.time_res,
+                case_config=case_config,
+            )

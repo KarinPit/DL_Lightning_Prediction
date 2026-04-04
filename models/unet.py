@@ -107,7 +107,7 @@ class UNet(nn.Module):
 
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2, alpha=0.25):
+    def __init__(self, gamma=2, alpha=0.75):
         super().__init__()
         self.gamma = gamma
         self.alpha = alpha
