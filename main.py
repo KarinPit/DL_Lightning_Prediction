@@ -254,6 +254,31 @@ if __name__ == "__main__":
             X_raw = X.clone()
             y_raw = y.clone()
 
+        # ── Physics raw channels: extract before normalisation ─────────────────
+        # These are the ERA5 variables used to build "physically impossible" masks.
+        # We extract them now (before in-place normalisation) so the values are raw.
+        PHYSICS_VARS_WANTED = ['cape', 'kx', 'tciw', 'crr', 'w_500', 'r_700', 'r_850']
+        physics_channels = []
+        physics_var_names = []
+        for var in PHYSICS_VARS_WANTED:
+            # Case-insensitive search (handles 'CAPE2D' in WRF configs too)
+            matches = [p for p in case_config.atm_params if p.lower() == var.lower()]
+            if matches:
+                ch_idx = case_config.atm_params.index(matches[0])
+                physics_channels.append(X[:, ch_idx:ch_idx + 1, :, :].clone())
+                physics_var_names.append(var)
+
+        if physics_channels and model_config.use_physics_loss:
+            physics_raw = torch.cat(physics_channels, dim=1)  # [N, K, H, W]
+            print(f"Physics loss enabled — extracted {len(physics_var_names)} constraint vars: "
+                  f"{physics_var_names}")
+        else:
+            physics_raw = torch.zeros(X.shape[0], 1, X.shape[2], X.shape[3])
+            physics_var_names = []
+            if model_config.use_physics_loss:
+                print("WARNING: use_physics_loss=True but none of the physics variables "
+                      "were found in atm_params — physics penalty will have no effect.")
+
         # compute mean and std of each feature
         train_X = X[train_idx]
         means, stds = mean_std_norm(train_X)
@@ -283,6 +308,9 @@ if __name__ == "__main__":
         # smoother = GaussianSmoothing(kernel_size=3, sigma=1)
         # y_smooth = smoother(y)
 
+        print(X.shape)  # should be (N_samples, N_channels, H, W)
+        print(y.shape)
+
         save_tensor_stats_report(
             X=X,
             y=y,
@@ -292,8 +320,8 @@ if __name__ == "__main__":
             groups=[train_groups, val_groups],
         )
 
-        # Data Loaders
-        full_dataset = TensorDataset(X, y)
+        # Include raw physics variables as third element so loops can build physics masks
+        full_dataset = TensorDataset(X, y, physics_raw)
         train_loader = DataLoader(
             Subset(full_dataset, train_idx),
             batch_size=model_config.batch_size,
@@ -306,21 +334,13 @@ if __name__ == "__main__":
             shuffle=False,
         )
 
-        ######## SANITY CHECKS
-
-        # Check shape of tensors
-        print(f'X Tensor shape {X.shape}\n')
-        print(f'y Tensor shape {y.shape}\n')
-
-        # Check ratio between number of lightning and number of total pixels
-        total_pixels = 0
-        total_lightning = 0
-        for X, y in train_loader:
-            total_pixels += y.numel()
-            total_lightning += y.sum().item()
-        print(f"Ratio: {total_pixels/total_lightning:.1f}\n")
-
-        ########################
+        # # Check ratio between number of lightning and number of total pixels
+        # total_pixels = 0
+        # total_lightning = 0
+        # for X, y in train_loader:
+        #     total_pixels += y.numel()
+        #     total_lightning += y.sum().item()
+        # print(f"Ratio: {total_pixels/total_lightning:.1f}\n")
 
         if run_config.to_train:
             # run train and evaluation
@@ -332,8 +352,18 @@ if __name__ == "__main__":
                 criterion=criterion,
                 num_epochs=model_config.num_epochs,
                 device=device,
-                decision_threshold=model_config.decision_threshold,  # change threshold.
-                scheduler=scheduler
+                decision_threshold=model_config.decision_threshold,
+                scheduler=scheduler,
+                use_physics_loss=model_config.use_physics_loss,
+                physics_weight=model_config.physics_weight,
+                physics_var_names=physics_var_names,
+                cape_min=model_config.cape_min,
+                ki_min=model_config.ki_min,
+                tciw_min=model_config.tciw_min,
+                crr_min=model_config.crr_min,
+                w500_max=model_config.w500_max,
+                r700_min=model_config.r700_min,
+                r850_min=model_config.r850_min,
             )
             # save the model's state for future runs
             torch.save(model.state_dict(), weights_save_path)

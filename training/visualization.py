@@ -18,9 +18,9 @@ def _sanitize_batch(xb, yb):
 
 def _get_batch(data_loader, batch_index):
     """Return the requested batch from a data loader."""
-    for current_batch_index, (xb, yb) in enumerate(data_loader):
+    for current_batch_index, batch in enumerate(data_loader):
         if current_batch_index == batch_index:
-            return xb, yb
+            return batch[0], batch[1]
     raise IndexError(f"Batch index {batch_index} is out of range for this data loader.")
 
 
@@ -28,7 +28,8 @@ def _find_sample_with_lightning(data_loader, occurrence_index=0):
     """Return the nth sample whose target contains at least one lightning pixel."""
     found_count = 0
 
-    for current_batch_index, (xb, yb) in enumerate(data_loader):
+    for current_batch_index, batch in enumerate(data_loader):
+        xb, yb = batch[0], batch[1]
         _, yb = _sanitize_batch(xb, yb)
         yb = (yb > 0).float()
 
