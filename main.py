@@ -283,9 +283,6 @@ if __name__ == "__main__":
         # smoother = GaussianSmoothing(kernel_size=3, sigma=1)
         # y_smooth = smoother(y)
 
-        print(X.shape)  # should be (N_samples, N_channels, H, W)
-        print(y.shape)
-
         save_tensor_stats_report(
             X=X,
             y=y,
@@ -295,6 +292,7 @@ if __name__ == "__main__":
             groups=[train_groups, val_groups],
         )
 
+        # Data Loaders
         full_dataset = TensorDataset(X, y)
         train_loader = DataLoader(
             Subset(full_dataset, train_idx),
@@ -308,6 +306,12 @@ if __name__ == "__main__":
             shuffle=False,
         )
 
+        ######## SANITY CHECKS
+
+        # Check shape of tensors
+        print(f'X Tensor shape {X.shape}\n')
+        print(f'y Tensor shape {y.shape}\n')
+
         # Check ratio between number of lightning and number of total pixels
         total_pixels = 0
         total_lightning = 0
@@ -315,6 +319,8 @@ if __name__ == "__main__":
             total_pixels += y.numel()
             total_lightning += y.sum().item()
         print(f"Ratio: {total_pixels/total_lightning:.1f}\n")
+
+        ########################
 
         if run_config.to_train:
             # run train and evaluation

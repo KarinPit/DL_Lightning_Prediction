@@ -10,8 +10,8 @@ RUN_CONFIG = RunConfig(
 
 MODEL_CONFIG = ModelConfig(
     learning_rate=0.001,
-    pos_weight=100.0,
-    num_epochs=15,
+    pos_weight=60.0,
+    num_epochs=30,
     batch_size=8,
     decision_threshold=0.85,
     clip_after_normalization=True,
@@ -44,7 +44,12 @@ ERA5_CASE_CONFIG = CaseConfig(
     test_cases=[],
     tensor_dataset_name="ERA5_train_cases_1_to_5",
     # ERA5 variable short names (must match what's in the NC files)
-    atm_params=["cape", "kx", "tciw", "d2m", "tcwv", "crr", "msl", "t2m", "hcc"],
+    atm_params=["cape", "kx", "tciw", "d2m", "tcwv", "crr", "msl", "t2m", "hcc",
+                "u_500", "u_700", "u_850",
+                "v_500", "v_700", "v_850",
+                "w_500", "w_700", "w_850",
+                "t_500", "t_700", "t_850",
+                "r_500", "r_700", "r_850"],
     with_subparams={},
     space_res="era5",       # ERA5 is on ~28km grid
     time_res="1_hours",
