@@ -334,14 +334,6 @@ if __name__ == "__main__":
             shuffle=False,
         )
 
-        # # Check ratio between number of lightning and number of total pixels
-        # total_pixels = 0
-        # total_lightning = 0
-        # for X, y in train_loader:
-        #     total_pixels += y.numel()
-        #     total_lightning += y.sum().item()
-        # print(f"Ratio: {total_pixels/total_lightning:.1f}\n")
-
         if run_config.to_train:
             # run train and evaluation
             history = train_model(
@@ -378,55 +370,66 @@ if __name__ == "__main__":
             model.load_state_dict(torch.load(weights_save_path, map_location=device))
             model.eval()
 
-            inspection_result = inspect_probability_maps(
-                model,
-                val_loader,
-                device,
-                output_dir="training/visualizations",
-                batch_index=1,
-                sample_index=0,
-                input_channel=1,
-                decision_threshold=model_config.decision_threshold,
-                thresholds=model_config.visualization_thresholds,
-                prefix=f"val_{experiment_tag}",
-                require_lightning=True,
-                lightning_occurrence_index=0,
-                channel_names=case_config.input_channel_names,
-                sample_metadata=sample_groups,
-            )
+            # Visualise multiple lightning samples from the validation set
+            NUM_VIZ_SAMPLES = 10  # how many different lightning events to plot
 
-            inspect_geo_probability_map(
-                model,
-                val_loader,
-                device,
-                output_dir="training/visualizations",
-                batch_index=1,
-                sample_index=0,
-                input_channel=1,
-                decision_threshold=model_config.decision_threshold,
-                thresholds=model_config.visualization_thresholds,
-                prefix=f"val_{experiment_tag}",
-                require_lightning=True,
-                lightning_occurrence_index=0,
-                channel_names=case_config.input_channel_names,
-                sample_metadata=sample_groups,
-                min_lat=CASE_CONFIG.min_lat,
-                max_lat=CASE_CONFIG.max_lat,
-                min_lon=CASE_CONFIG.min_lon,
-                max_lon=CASE_CONFIG.max_lon,
-            )
+            for viz_i in range(NUM_VIZ_SAMPLES):
+                try:
+                    inspection_result = inspect_probability_maps(
+                        model,
+                        val_loader,
+                        device,
+                        output_dir="training/visualizations",
+                        batch_index=1,
+                        sample_index=0,
+                        input_channel=1,
+                        decision_threshold=model_config.decision_threshold,
+                        thresholds=model_config.visualization_thresholds,
+                        prefix=f"val_{experiment_tag}_s{viz_i:02d}",
+                        require_lightning=True,
+                        lightning_occurrence_index=viz_i,
+                        channel_names=case_config.input_channel_names,
+                        sample_metadata=sample_groups,
+                    )
 
-            if run_config.plot_raw_tensors:
-                plot_original_maps_for_loader_sample(
-                    X_raw,
-                    y_raw,
-                    val_loader,
-                    inspection_result=inspection_result,
-                    output_dir="training/visualizations",
-                    prefix="raw",
-                    channel_names=case_config.input_channel_names,
-                    sample_metadata=sample_groups,
-                )
+                    inspect_geo_probability_map(
+                        model,
+                        val_loader,
+                        device,
+                        output_dir="training/visualizations",
+                        batch_index=1,
+                        sample_index=0,
+                        input_channel=1,
+                        decision_threshold=model_config.decision_threshold,
+                        thresholds=model_config.visualization_thresholds,
+                        prefix=f"val_{experiment_tag}_s{viz_i:02d}",
+                        require_lightning=True,
+                        lightning_occurrence_index=viz_i,
+                        channel_names=case_config.input_channel_names,
+                        sample_metadata=sample_groups,
+                        min_lat=CASE_CONFIG.min_lat,
+                        max_lat=CASE_CONFIG.max_lat,
+                        min_lon=CASE_CONFIG.min_lon,
+                        max_lon=CASE_CONFIG.max_lon,
+                    )
+
+                    if run_config.plot_raw_tensors and viz_i == 0:
+                        # Raw tensor comparison only for the first sample (expensive)
+                        plot_original_maps_for_loader_sample(
+                            X_raw,
+                            y_raw,
+                            val_loader,
+                            inspection_result=inspection_result,
+                            output_dir="training/visualizations",
+                            prefix="raw",
+                            channel_names=case_config.input_channel_names,
+                            sample_metadata=sample_groups,
+                        )
+
+                except ValueError:
+                    # Fewer than NUM_VIZ_SAMPLES lightning events in val set — stop early
+                    print(f"Only {viz_i} lightning samples found in val set — stopping visualisation.")
+                    break
 
     else:
         if case_config.data_source == "era5":

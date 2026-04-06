@@ -23,5 +23,5 @@ threshold=0.950 | lightning_detected_fraction=0.2000 | background_above_threshol
 threshold=1.000 | lightning_detected_fraction=0.0000 | background_above_threshold_fraction=0.0000
 
 Saved files
-maps=training/visualizations/val_seed_42_batch0_sample3_maps.png
-histogram=training/visualizations/val_seed_42_batch0_sample3_hist.png
+maps=training/visualizations/val_seed_42_s00_batch0_sample3_maps.png
+histogram=training/visualizations/val_seed_42_s00_batch0_sample3_hist.png

@@ -1,0 +1,27 @@
+Sample: batch=0, sample=7
+Loader sample index: 7
+Original dataset sample index: 41
+Sample timestamp/group: Case1_Nov_2022_23_25__2022-11-24_17_00_00
+Input channels: 0 (cape), 1 (kx), 2 (tciw), 3 (d2m), 4 (tcwv), 5 (crr), 6 (msl), 7 (t2m), 8 (hcc)
+Selected input channel: Input Channel 1: kx
+Require lightning: True
+Lightning occurrence index: 4
+Decision threshold shown in map: 0.85
+
+Probability stats
+Lightning pixels: 12 | Background pixels: 1690
+Lightning probs -> min=0.837790, max=0.995896, mean=0.963309, median=0.982545
+Background probs -> min=0.000009, max=0.995175, mean=0.029473, median=0.001579
+
+Threshold summary
+threshold=0.500 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.0284
+threshold=0.600 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.0272
+threshold=0.700 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.0219
+threshold=0.800 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.0195
+threshold=0.900 | lightning_detected_fraction=0.9167 | background_above_threshold_fraction=0.0136
+threshold=0.950 | lightning_detected_fraction=0.7500 | background_above_threshold_fraction=0.0089
+threshold=1.000 | lightning_detected_fraction=0.0000 | background_above_threshold_fraction=0.0000
+
+Saved files
+maps=training/visualizations/val_seed_42_s04_batch0_sample7_maps.png
+histogram=training/visualizations/val_seed_42_s04_batch0_sample7_hist.png
