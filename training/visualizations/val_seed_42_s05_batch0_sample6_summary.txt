@@ -1,0 +1,27 @@
+Sample: batch=0, sample=6
+Loader sample index: 6
+Original dataset sample index: 34
+Sample timestamp/group: Case1_Nov_2022_23_25__2022-11-24_12_00_00
+Input channels: 0 (cape_T-2), 1 (kx_T-2), 2 (tciw_T-2), 3 (d2m_T-2), 4 (tcwv_T-2), 5 (crr_T-2), 6 (msl_T-2), 7 (t2m_T-2), 8 (hcc_T-2), 9 (cape_T-1), 10 (kx_T-1), 11 (tciw_T-1), 12 (d2m_T-1), 13 (tcwv_T-1), 14 (crr_T-1), 15 (msl_T-1), 16 (t2m_T-1), 17 (hcc_T-1), 18 (cape_T), 19 (kx_T), 20 (tciw_T), 21 (d2m_T), 22 (tcwv_T), 23 (crr_T), 24 (msl_T), 25 (t2m_T), 26 (hcc_T)
+Selected input channel: Input Channel 1: kx_T-2
+Require lightning: True
+Lightning occurrence index: 5
+Decision threshold shown in map: 0.85
+
+Probability stats
+Lightning pixels: 12 | Background pixels: 1690
+Lightning probs -> min=0.957062, max=0.998956, mean=0.990392, median=0.994100
+Background probs -> min=0.000071, max=0.997851, mean=0.042667, median=0.002513
+
+Threshold summary
+threshold=0.500 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.0402
+threshold=0.600 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.0367
+threshold=0.700 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.0337
+threshold=0.800 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.0302
+threshold=0.900 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.0237
+threshold=0.950 | lightning_detected_fraction=1.0000 | background_above_threshold_fraction=0.0172
+threshold=1.000 | lightning_detected_fraction=0.0000 | background_above_threshold_fraction=0.0000
+
+Saved files
+maps=training/visualizations/val_seed_42_s05_batch0_sample6_maps.png
+histogram=training/visualizations/val_seed_42_s05_batch0_sample6_hist.png

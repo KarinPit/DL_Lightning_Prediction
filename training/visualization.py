@@ -678,22 +678,23 @@ def inspect_geo_probability_map(
         output_dir, f"{prefix}_batch{batch_index}_sample{sample_index}_maps.png"
     )
 
-    # plotting
-    panel_count = 2
+    # Real lightning pixels as a masked array — transparent where no lightning
+    true_masked = np.ma.masked_where(true_map < 0.5, true_map)
+    n_lightning  = int(true_map.sum())
+    n_pred       = int(pred_binary_map.sum())
+
+    # plotting — 2 panels, real lightning pixels overlaid as red on both
     fig, axes = plt.subplots(
-        1,
-        panel_count,
-        figsize=(6.2 * panel_count, 5.5),
+        1, 2,
+        figsize=(6.5 * 2, 5.5),
         subplot_kw={"projection": ccrs.PlateCarree()},
     )
-    if panel_count == 1:
-        axes = [axes]
 
     extent = [min_lon, max_lon, min_lat, max_lat]
 
-    # probability map
-    _apply_geo_axis_style(axes[-2], min_lon, max_lon, min_lat, max_lat)
-    im_overlay = axes[-2].imshow(
+    # ── Panel 1: Predicted probability + real lightning pixels in red ─────
+    _apply_geo_axis_style(axes[0], min_lon, max_lon, min_lat, max_lat)
+    im_prob = axes[0].imshow(
         prob_map,
         cmap=probability_cmap,
         norm=probability_norm,
@@ -701,46 +702,33 @@ def inspect_geo_probability_map(
         origin="lower",
         transform=ccrs.PlateCarree(),
     )
-    axes[-2].contour(
-        true_map,
-        levels=[0.5],
-        colors="cyan",
-        linewidths=1,
-        extent=extent,
-        origin="lower",
-        transform=ccrs.PlateCarree(),
+    axes[0].imshow(
+        true_masked,
+        cmap=mcolors.ListedColormap(["red"]),
+        vmin=0.5, vmax=1.0,
+        extent=extent, origin="lower", transform=ccrs.PlateCarree(),
+        alpha=0.85,
     )
-    axes[-2].set_title("Probabilities + Truth Contour")
-    plt.colorbar(
-        im_overlay,
-        ax=axes[-2],
-        fraction=0.046,
-        pad=0.04,
-        ticks=probability_bounds,
-    )
+    axes[0].set_title(f"Predicted Probability  (red = observed lightning, {n_lightning} cells)")
+    plt.colorbar(im_prob, ax=axes[0], fraction=0.046, pad=0.04, ticks=probability_bounds)
 
-    # binary decision map
-    _apply_geo_axis_style(axes[-1], min_lon, max_lon, min_lat, max_lat)
-    im_binary = axes[-1].imshow(
+    # ── Panel 2: Binary prediction + real lightning pixels in red ─────────
+    _apply_geo_axis_style(axes[1], min_lon, max_lon, min_lat, max_lat)
+    axes[1].imshow(
         pred_binary_map,
-        cmap="gray",
-        vmin=0.0,
-        vmax=1.0,
-        extent=extent,
-        origin="lower",
-        transform=ccrs.PlateCarree(),
+        cmap="gray", vmin=0.0, vmax=1.0,
+        extent=extent, origin="lower", transform=ccrs.PlateCarree(),
     )
-    axes[-1].contour(
-        true_map,
-        levels=[0.5],
-        colors="red",
-        linewidths=1,
-        extent=extent,
-        origin="lower",
-        transform=ccrs.PlateCarree(),
+    axes[1].imshow(
+        true_masked,
+        cmap=mcolors.ListedColormap(["red"]),
+        vmin=0.5, vmax=1.0,
+        extent=extent, origin="lower", transform=ccrs.PlateCarree(),
+        alpha=0.85,
     )
-    axes[-1].set_title(f"Pred >= {decision_threshold}")
-    plt.colorbar(im_binary, ax=axes[-1], fraction=0.046, pad=0.04)
+    axes[1].set_title(
+        f"Pred >= {decision_threshold} ({n_pred} cells)  (red = observed lightning)"
+    )
 
     fig.tight_layout()
     fig.savefig(figure_path, dpi=150, bbox_inches="tight")

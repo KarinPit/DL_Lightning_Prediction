@@ -2,7 +2,7 @@ from config.constants import CASES
 from config.schema import CaseConfig, ModelConfig, RunConfig
 
 RUN_CONFIG = RunConfig(
-    to_train=True,
+    to_train=False,
     use_seed=True,
     seed_value=42,
     plot_raw_tensors=True,
