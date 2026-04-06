@@ -2,16 +2,16 @@ from config.constants import CASES
 from config.schema import CaseConfig, ModelConfig, RunConfig
 
 RUN_CONFIG = RunConfig(
-    to_train=False,
+    to_train=True,
     use_seed=True,
     seed_value=42,
-    plot_raw_tensors=True,
+    plot_raw_tensors=False,
 )
 
 MODEL_CONFIG = ModelConfig(
     learning_rate=0.001,
     pos_weight=60.0,
-    num_epochs=15,
+    num_epochs=30,
     batch_size=8,
     decision_threshold=0.85,
     clip_after_normalization=True,
@@ -19,7 +19,8 @@ MODEL_CONFIG = ModelConfig(
     train_fraction=0.8,
     visualization_thresholds=[0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0],
     # Physics-aware constraints
-    use_physics_loss=True,
+    use_physics_loss=True,   # soft penalty in loss
+    use_physics_mask=False,  # hard mask on predictions — set True to zero impossible cells
     physics_weight=1.0,
     cape_min=100.0,    # J/kg  — CAPE must signal some instability
     ki_min=20.0,       # K-Index > 20 required for thunderstorm potential
@@ -52,9 +53,22 @@ ERA5_CASE_CONFIG = CaseConfig(
     train_cases=CASES[:5],
     val_cases=[],
     test_cases=[],
-    tensor_dataset_name="ERA5_train_cases_1_to_5_lookback3",  # new name → forces tensor rebuild
+    tensor_dataset_name="ERA5_train_cases_1_to_5_24vars_lookback3",  # new name → forces tensor rebuild
     # ERA5 variable short names (must match what's in the NC files)
-    atm_params=["cape", "kx", "tciw", "d2m", "tcwv", "crr", "msl", "t2m", "hcc"],
+    # 9 surface/column vars + 15 pressure-level vars (500/700/850 hPa: u,v,w,t,r)
+    atm_params=[
+        # Surface / column
+        "cape", "kx", "tciw", "d2m", "tcwv", "crr", "msl", "t2m", "hcc",
+        # Wind components (u, v) at 500, 700, 850 hPa
+        "u_500", "u_700", "u_850",
+        "v_500", "v_700", "v_850",
+        # Vertical velocity (omega, Pa/s) at 500, 700, 850 hPa
+        "w_500", "w_700", "w_850",
+        # Temperature at 500, 700, 850 hPa
+        "t_500", "t_700", "t_850",
+        # Relative humidity at 500, 700, 850 hPa
+        "r_500", "r_700", "r_850",
+    ],
     with_subparams={},
     space_res="era5",       # ERA5 is on ~28km grid
     time_res="1_hours",
@@ -63,7 +77,7 @@ ERA5_CASE_CONFIG = CaseConfig(
     min_lon=27.954,
     max_lon=39.292,
     data_source="era5",
-    lookback_hours=3,       # stack T-2, T-1, T → 27 input channels (9 vars × 3 hours)
+    lookback_hours=3,       # stack T-2, T-1, T → 72 input channels (24 vars × 3 hours)
 )
 
 # ── Active config — switch here ────────────────────────────────────────────

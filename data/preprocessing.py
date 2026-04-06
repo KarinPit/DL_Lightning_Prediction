@@ -46,7 +46,7 @@ def load_nc_layer(file_path, variable_name):
     target_var = next(
         (var for var in ds.variables if var.lower() == variable_name.lower()), None
     )
-    
+
     # if variable name is not found, the ds is closed
     if target_var is None:
         ds.close()
@@ -61,6 +61,33 @@ def load_nc_layer(file_path, variable_name):
     tensor = torch.from_numpy(np.array(data).astype(np.float32))
     ds.close()
     return tensor
+
+
+def load_nc_all_vars(file_path, variable_names):
+    """
+    Open an NC file ONCE and extract all requested variables in a single pass.
+    Returns a list of tensors in the same order as variable_names, or None if
+    any variable is missing.
+
+    Much faster than calling load_nc_layer() per variable because each
+    xr.open_dataset() call has significant overhead.
+    """
+    ds = xr.open_dataset(file_path)
+    ds_vars_lower = {v.lower(): v for v in ds.variables}
+
+    tensors = []
+    for variable_name in variable_names:
+        target_var = ds_vars_lower.get(variable_name.lower())
+        if target_var is None:
+            ds.close()
+            return None
+        data = ds.variables[target_var][:]
+        if data.ndim == 3:
+            data = data[0]
+        tensors.append(torch.from_numpy(np.array(data).astype(np.float32)))
+
+    ds.close()
+    return tensors
 
 
 def get_param_source_names(param_name, with_subparams):
@@ -260,7 +287,11 @@ def build_and_save_tensors_era5(tensor_path, atm_params, case_config):
     as input channels so the model sees temporal evolution.  Any gap in the hourly
     sequence causes the triplet to be skipped.
 
-    Input channels:  n_vars * lookback_hours  (e.g. 9 vars × 3 hours = 27)
+    Speed strategy: PRELOAD every file ONCE into a list of stacked tensors at the
+    start of each case, then build sliding windows from RAM.  With lookback=3 this
+    eliminates 3× redundant file I/O compared to the naive per-window approach.
+
+    Input channels:  n_vars * lookback_hours  (e.g. 24 vars × 3 hours = 72)
     Output channels: 1  (binary lightning at hour T)
 
     Expected file path:
@@ -270,8 +301,8 @@ def build_and_save_tensors_era5(tensor_path, atm_params, case_config):
     all_y_samples = []
     sample_groups = []
 
-    lookback = getattr(case_config, 'lookback_hours', 1)
-    n_vars   = len(atm_params)
+    lookback  = getattr(case_config, 'lookback_hours', 1)
+    n_vars    = len(atm_params)
     era5_base = os.path.join(MAIN_PATH, 'thesis-bucket', 'Processed_Data', 'ERA5')
 
     for case in case_config.train_case_names:
@@ -293,14 +324,35 @@ def build_and_save_tensors_era5(tensor_path, atm_params, case_config):
                 valid_files.append(fname)
                 timestamps.append(dt)
 
-        print(f"Case {case}: {len(valid_files)} hourly ERA5 files  |  lookback={lookback}h")
+        n_files = len(valid_files)
+        print(f"Case {case}: {n_files} hourly ERA5 files  |  lookback={lookback}h  |  {n_vars} vars")
 
-        skipped_gap = 0
+        # ── PRELOAD every file ONCE into RAM ──────────────────────────────────
+        # cached_x[i]  : torch.Tensor [n_vars, H, W]  — all atm_params for hour i
+        # cached_y[i]  : torch.Tensor [H, W]           — entln_count for hour i
+        #                None if the file was missing a variable
+        cached_x = []
+        cached_y = []
+        for fname in tqdm(valid_files, desc=f"{case} loading"):
+            fpath      = os.path.join(case_era5_path, fname)
+            # Load all atm vars + entln_count in a single xr.open_dataset call
+            all_vars   = load_nc_all_vars(fpath, atm_params + ['entln_count'])
+            if all_vars is None or len(all_vars) != n_vars + 1:
+                cached_x.append(None)
+                cached_y.append(None)
+            else:
+                x_stacked = torch.stack(all_vars[:n_vars], dim=0)  # [n_vars, H, W]
+                cached_x.append(x_stacked)
+                cached_y.append(all_vars[n_vars])                  # [H, W]
 
-        for i in tqdm(range(lookback - 1, len(valid_files)), desc=case):
-            # ── Check all lookback hours are consecutive ───────────────────
+        # ── Build sliding windows from the in-memory cache ────────────────────
+        skipped_gap     = 0
+        skipped_missing = 0
+
+        for i in range(lookback - 1, n_files):
+            # Check consecutive hours
             window_times = timestamps[i - lookback + 1 : i + 1]
-            consecutive = all(
+            consecutive  = all(
                 window_times[j + 1] - window_times[j] == timedelta(hours=1)
                 for j in range(len(window_times) - 1)
             )
@@ -308,33 +360,15 @@ def build_and_save_tensors_era5(tensor_path, atm_params, case_config):
                 skipped_gap += 1
                 continue
 
-            # ── Load variables for each hour in the window ─────────────────
-            # Order: T-(lookback-1), ..., T-1, T  (chronological)
-            all_hour_tensors = []
-            valid = True
-            for t_idx in range(i - lookback + 1, i + 1):
-                fpath = os.path.join(case_era5_path, valid_files[t_idx])
-                for param in atm_params:
-                    tensor = load_nc_layer(fpath, param)
-                    if tensor is None:
-                        valid = False
-                        break
-                    all_hour_tensors.append(tensor)
-                if not valid:
-                    break
-
-            expected_channels = lookback * n_vars
-            if not valid or len(all_hour_tensors) != expected_channels:
+            # Check all hours in window loaded successfully
+            window_indices = range(i - lookback + 1, i + 1)
+            if any(cached_x[t] is None for t in window_indices) or cached_y[i] is None:
+                skipped_missing += 1
                 continue
 
-            # ── Load ENTLN target at hour T (last in window) ───────────────
-            fpath_t = os.path.join(case_era5_path, valid_files[i])
-            y_tensor = load_nc_layer(fpath_t, 'entln_count')
-            if y_tensor is None:
-                continue
-
-            x_tensor = torch.stack(all_hour_tensors, dim=0)  # [lookback*n_vars, H, W]
-            y_binary  = (y_tensor > 0).float()
+            # Stack all hours: [lookback*n_vars, H, W]  chronological order
+            x_tensor = torch.cat([cached_x[t] for t in window_indices], dim=0)
+            y_binary = (cached_y[i] > 0).float()
 
             all_x_samples.append(x_tensor)
             all_y_samples.append(y_binary.unsqueeze(0))
@@ -344,6 +378,8 @@ def build_and_save_tensors_era5(tensor_path, atm_params, case_config):
 
         if skipped_gap:
             print(f"  Skipped {skipped_gap} samples due to gaps in the hourly sequence.")
+        if skipped_missing:
+            print(f"  Skipped {skipped_missing} samples due to missing variables in files.")
 
     print(f"Total ERA5 samples: {len(all_x_samples)}")
 

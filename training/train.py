@@ -161,6 +161,7 @@ def collect_val_predictions(
     data_loader,
     device,
     use_physics_loss=False,
+    use_physics_mask=False,
     physics_var_names=None,
     cape_min=None,
     ki_min=None,
@@ -195,14 +196,12 @@ def collect_val_predictions(
             logits = model(xb)
             probs  = torch.sigmoid(logits)
 
-            if use_physics_loss and physics_raw_b is not None and physics_var_names:
+            if use_physics_mask and use_physics_loss and physics_var_names and physics_raw_b is not None:
                 impossible = _build_impossible_mask(
                     physics_raw_b, physics_var_names,
                     cape_min, ki_min, tciw_min, crr_min, w500_max, r700_min, r850_min,
                 )
-                _, probs = _apply_physics_mask(
-                    (probs > 0.5).int(), probs, impossible, device
-                )
+                _, probs = _apply_physics_mask((probs > 0.5).int(), probs, impossible, device)
 
             all_probs.append(probs.squeeze(1).detach().cpu().numpy())
             all_labels.append(yb.squeeze(1).detach().cpu().numpy())
@@ -217,6 +216,7 @@ def evaluate_model(
     device,
     decision_threshold=0.5,
     use_physics_loss=False,
+    use_physics_mask=False,
     physics_weight=1.0,
     physics_var_names=None,
     cape_min=None,
@@ -295,7 +295,7 @@ def evaluate_model(
             binary_preds = (probs > decision_threshold).int()
 
             # Hard physics mask: zero out predictions in physically impossible cells
-            if impossible is not None:
+            if use_physics_mask and impossible is not None:
                 binary_preds, probs = _apply_physics_mask(binary_preds, probs, impossible, device)
 
             # Move to CPU / NumPy for metric functions
@@ -332,6 +332,7 @@ def train_model(
     decision_threshold=0.5,
     scheduler=None,
     use_physics_loss=False,
+    use_physics_mask=False,
     physics_weight=1.0,
     physics_var_names=None,
     cape_min=None,
@@ -422,8 +423,8 @@ def train_model(
             probs = torch.sigmoid(logits)
             binary_preds = (probs > decision_threshold).int()
 
-            # Hard physics mask applied to training metrics only (not to gradients)
-            if impossible is not None:
+            # Hard physics mask applied to training metrics (not to gradients)
+            if use_physics_mask and impossible is not None:
                 binary_preds, probs = _apply_physics_mask(binary_preds, probs, impossible, device)
 
             probs_np = probs.detach().cpu().numpy()
@@ -454,6 +455,7 @@ def train_model(
             device=device,
             decision_threshold=decision_threshold,
             use_physics_loss=use_physics_loss,
+            use_physics_mask=use_physics_mask,
             physics_weight=physics_weight,
             physics_var_names=physics_var_names,
             cape_min=cape_min,

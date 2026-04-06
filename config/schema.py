@@ -24,7 +24,8 @@ class ModelConfig:
         default_factory=lambda: [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
     )
     # ── Physics-aware training ────────────────────────────────────────────────
-    use_physics_loss: bool = False
+    use_physics_loss: bool = False    # soft penalty added to loss during training
+    use_physics_mask: bool = False    # hard mask — zero predictions in impossible cells at inference
     physics_weight: float = 1.0      # weight of physics penalty relative to main BCE loss
     # Per-constraint thresholds — set to None to disable an individual constraint.
     # Semantics: value < _min  (or >= _max) → lightning physically impossible in that cell.
