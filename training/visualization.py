@@ -7,6 +7,7 @@ import cartopy.feature as cfeature
 import numpy as np
 import torch
 from torch.utils.data import Subset
+from training.contigency_metrics import fss_useful_threshold
 
 
 def _sanitize_batch(xb, yb):
@@ -17,7 +18,7 @@ def _sanitize_batch(xb, yb):
 
 
 def _get_batch(data_loader, batch_index):
-    """Return the requested batch from a data loader."""
+    """Return the requested batch from a data loader (handles 2- or 3-element batches)."""
     for current_batch_index, batch in enumerate(data_loader):
         if current_batch_index == batch_index:
             return batch[0], batch[1]
@@ -769,3 +770,112 @@ def inspect_geo_probability_map(
         "original_sample_index": original_sample_index,
         "sample_label": sample_label,
     }
+
+
+# ── FSS curve ─────────────────────────────────────────────────────────────────
+
+def plot_fss_curve(fss_results, true_binary_all, output_dir="training/visualizations",
+                   prefix="val", cell_size_km=25):
+    """
+    Plot FSS vs neighbourhood size.
+
+    Parameters
+    ----------
+    fss_results     : dict {n: fss_value}  from calc_fss_from_arrays
+    true_binary_all : [N, H, W] array of binary observations (to compute useful threshold)
+    output_dir      : where to save the figure
+    prefix          : filename prefix
+    cell_size_km    : approximate grid cell size in km (ERA5 ≈ 25 km at mid-latitudes)
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    ns       = sorted(fss_results.keys())
+    fss_vals = [fss_results[n] for n in ns]
+    scales_km = [n * cell_size_km for n in ns]
+
+    useful = fss_useful_threshold(true_binary_all)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(scales_km, fss_vals, marker='o', color='steelblue', linewidth=2, label='FSS')
+    ax.axhline(useful, color='red', linestyle='--', linewidth=1.5,
+               label=f'Useful skill threshold ({useful:.3f})')
+    ax.axhline(0.5, color='gray', linestyle=':', linewidth=1, label='FSS = 0.5')
+    ax.set_xlabel('Neighbourhood scale (km)', fontsize=12)
+    ax.set_ylabel('Fractions Skill Score (FSS)', fontsize=12)
+    ax.set_title('FSS vs. Neighbourhood Scale', fontsize=13)
+    ax.set_ylim(0, 1)
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    figure_path = os.path.join(output_dir, f"{prefix}_fss_curve.png")
+    fig.tight_layout()
+    fig.savefig(figure_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"Saved FSS curve to: {figure_path}")
+    print("FSS by scale:")
+    for n, km, fss in zip(ns, scales_km, fss_vals):
+        marker = " <- skillful" if fss >= useful else ""
+        print(f"  n={n:2d} ({km:4d} km): FSS = {fss:.4f}{marker}")
+    print(f"  Useful-skill threshold: {useful:.4f}")
+
+    return figure_path
+
+
+# ── Reliability diagram ───────────────────────────────────────────────────────
+
+def plot_reliability_diagram(reliability_data, output_dir="training/visualizations",
+                              prefix="val"):
+    """
+    Plot a reliability (attributes) diagram.
+
+    Parameters
+    ----------
+    reliability_data : dict from calc_reliability_data
+    output_dir       : where to save
+    prefix           : filename prefix
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    bin_centers = reliability_data['bin_centers']
+    obs_freq    = reliability_data['obs_frequency']
+    fcst_freq   = reliability_data['forecast_frequency']
+    base_rate   = reliability_data['base_rate']
+
+    has_data = ~np.isnan(obs_freq)
+
+    fig, (ax_rel, ax_sharp) = plt.subplots(
+        2, 1, figsize=(6, 8),
+        gridspec_kw={'height_ratios': [3, 1]},
+        sharex=True,
+    )
+
+    # ── Reliability panel ──
+    ax_rel.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Perfect reliability')
+    ax_rel.axhline(base_rate, color='gray', linestyle=':', linewidth=1,
+                   label=f'Climatology ({base_rate:.4f})')
+    ax_rel.fill_between([0, 1], [0, 1], [base_rate, base_rate],
+                        alpha=0.07, color='green', label='Positive skill region')
+    ax_rel.plot(bin_centers[has_data], obs_freq[has_data],
+                marker='o', color='steelblue', linewidth=2, label='Model')
+    ax_rel.set_ylabel('Observed frequency', fontsize=11)
+    ax_rel.set_title('Reliability Diagram', fontsize=13)
+    ax_rel.set_xlim(0, 1)
+    ax_rel.set_ylim(0, 1)
+    ax_rel.legend(fontsize=9)
+    ax_rel.grid(alpha=0.3)
+
+    # ── Sharpness (histogram) panel ──
+    ax_sharp.bar(bin_centers, fcst_freq, width=0.09, color='steelblue', alpha=0.7)
+    ax_sharp.set_xlabel('Predicted probability', fontsize=11)
+    ax_sharp.set_ylabel('Forecast fraction', fontsize=10)
+    ax_sharp.set_title('Sharpness', fontsize=11)
+    ax_sharp.grid(alpha=0.3)
+
+    figure_path = os.path.join(output_dir, f"{prefix}_reliability.png")
+    fig.tight_layout()
+    fig.savefig(figure_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"Saved reliability diagram to: {figure_path}")
+    return figure_path

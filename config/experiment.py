@@ -3,7 +3,7 @@ from config.schema import CaseConfig, ModelConfig, RunConfig
 
 
 RUN_CONFIG = RunConfig(
-    to_train=False,
+    to_train=True,
     use_seed=True,
     seed_value=42,
     plot_raw_tensors=True,

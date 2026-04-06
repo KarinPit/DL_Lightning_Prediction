@@ -10,11 +10,14 @@ from config.constants import MAIN_PATH
 from config.experiment import CASE_CONFIG, MODEL_CONFIG, RUN_CONFIG
 from data.preprocessing import build_and_save_tensors, build_and_save_tensors_era5, mean_std_norm
 from models.unet import UNet, FocalLoss, GaussianSmoothing
-from training.train import train_model
+from training.train import train_model, collect_val_predictions
+from training.contigency_metrics import calc_fss_from_arrays, calc_reliability_data
 from training.visualization import (
     inspect_probability_maps,
     plot_original_maps_for_loader_sample,
     inspect_geo_probability_map,
+    plot_fss_curve,
+    plot_reliability_diagram,
 )
 
 
@@ -334,6 +337,15 @@ if __name__ == "__main__":
             shuffle=False,
         )
 
+        # Check ratio between number of lightning and number of total pixels
+        total_pixels = 0
+        total_lightning = 0
+        for batch in train_loader:
+            y = batch[1]
+            total_pixels += y.numel()
+            total_lightning += y.sum().item()
+        print(f"Ratio: {total_pixels/total_lightning:.1f}\n")
+
         if run_config.to_train:
             # run train and evaluation
             history = train_model(
@@ -359,6 +371,45 @@ if __name__ == "__main__":
             )
             # save the model's state for future runs
             torch.save(model.state_dict(), weights_save_path)
+
+            # ── Post-training: FSS and Reliability diagram ────────────────────
+            print("\nComputing FSS and Reliability diagram on validation set...")
+            all_probs_np, all_labels_np = collect_val_predictions(
+                model=model,
+                data_loader=val_loader,
+                device=device,
+                use_physics_loss=model_config.use_physics_loss,
+                physics_var_names=physics_var_names,
+                cape_min=model_config.cape_min,
+                ki_min=model_config.ki_min,
+                tciw_min=model_config.tciw_min,
+                crr_min=model_config.crr_min,
+                w500_max=model_config.w500_max,
+                r700_min=model_config.r700_min,
+                r850_min=model_config.r850_min,
+            )
+
+            # FSS at neighbourhood sizes 1–9 (each cell ≈ 25 km for ERA5)
+            fss_results = calc_fss_from_arrays(
+                all_probs_np, all_labels_np,
+                threshold=model_config.decision_threshold,
+                neighborhood_sizes=[1, 3, 5, 7, 9],
+            )
+            plot_fss_curve(
+                fss_results,
+                all_labels_np,
+                output_dir="training/visualizations",
+                prefix=f"{experiment_tag}",
+                cell_size_km=25,
+            )
+
+            # Reliability diagram
+            reliability_data = calc_reliability_data(all_probs_np, all_labels_np, n_bins=10)
+            plot_reliability_diagram(
+                reliability_data,
+                output_dir="training/visualizations",
+                prefix=f"{experiment_tag}",
+            )
 
         else:
             if not os.path.exists(weights_save_path):

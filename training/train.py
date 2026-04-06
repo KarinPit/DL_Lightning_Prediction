@@ -156,6 +156,60 @@ def _physics_penalty(logits, impossible, device):
     return penalty
 
 
+def collect_val_predictions(
+    model,
+    data_loader,
+    device,
+    use_physics_loss=False,
+    physics_var_names=None,
+    cape_min=None,
+    ki_min=None,
+    tciw_min=None,
+    crr_min=None,
+    w500_max=None,
+    r700_min=None,
+    r850_min=None,
+):
+    """
+    Run model on a loader and return all predicted probabilities and true labels
+    as numpy arrays of shape [N, H, W] (squeezed from [N, 1, H, W]).
+
+    Physics mask is applied to probabilities when use_physics_loss=True,
+    giving an honest view of what the model actually outputs after constraints.
+    Used for FSS and reliability diagram computation after training.
+    """
+    model.eval()
+    all_probs  = []
+    all_labels = []
+
+    with torch.no_grad():
+        for batch in tqdm(data_loader, desc="Collecting predictions", unit="batch", leave=False):
+            xb, yb        = batch[0], batch[1]
+            physics_raw_b = batch[2] if len(batch) > 2 else None
+
+            xb = xb.to(device)
+            yb = yb.to(device)
+            xb, yb = _sanitize_batch(xb, yb)
+            yb = (yb > 0).float()
+
+            logits = model(xb)
+            probs  = torch.sigmoid(logits)
+
+            if use_physics_loss and physics_raw_b is not None and physics_var_names:
+                impossible = _build_impossible_mask(
+                    physics_raw_b, physics_var_names,
+                    cape_min, ki_min, tciw_min, crr_min, w500_max, r700_min, r850_min,
+                )
+                _, probs = _apply_physics_mask(
+                    (probs > 0.5).int(), probs, impossible, device
+                )
+
+            all_probs.append(probs.squeeze(1).detach().cpu().numpy())
+            all_labels.append(yb.squeeze(1).detach().cpu().numpy())
+
+    return np.concatenate(all_probs, axis=0), np.concatenate(all_labels, axis=0)
+
+
 def evaluate_model(
     model,
     data_loader,
