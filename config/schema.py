@@ -90,11 +90,24 @@ class CaseConfig:
     def is_multi_case(self):
         return len(self.train_case_names) > 1
 
+    lookback_hours: int = 1   # how many consecutive hours to stack as input channels
+                               # 1 = single snapshot, 3 = T-2, T-1, T stacked
+
     @property
     def input_channel_names(self):
-        channel_names = []
+        """Channel names in the order they appear in the X tensor."""
+        base_names = []
         for param in self.atm_params:
-            channel_names.extend(self.with_subparams.get(param, [param]))
+            base_names.extend(self.with_subparams.get(param, [param]))
+
+        if self.lookback_hours == 1:
+            return base_names
+
+        # Stack T-(lookback-1), ..., T-1, T — label each channel with its time offset
+        channel_names = []
+        for t_back in range(self.lookback_hours - 1, -1, -1):
+            suffix = f"_T-{t_back}" if t_back > 0 else "_T"
+            channel_names.extend([f"{n}{suffix}" for n in base_names])
         return channel_names
 
     @property

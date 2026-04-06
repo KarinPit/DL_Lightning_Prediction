@@ -260,14 +260,22 @@ if __name__ == "__main__":
         # ── Physics raw channels: extract before normalisation ─────────────────
         # These are the ERA5 variables used to build "physically impossible" masks.
         # We extract them now (before in-place normalisation) so the values are raw.
+        # With lookback > 1 the tensor has shape [N, lookback*n_vars, H, W].
+        # We always use the LAST time step (hour T) for physics — it is the most
+        # recent observation and the one that corresponds to the target label.
         PHYSICS_VARS_WANTED = ['cape', 'kx', 'tciw', 'crr', 'w_500', 'r_700', 'r_850']
+        lookback = getattr(case_config, 'lookback_hours', 1)
+        n_atm    = len(case_config.atm_params)
+        t_offset = (lookback - 1) * n_atm   # first channel index of hour T
+
         physics_channels = []
         physics_var_names = []
         for var in PHYSICS_VARS_WANTED:
             # Case-insensitive search (handles 'CAPE2D' in WRF configs too)
             matches = [p for p in case_config.atm_params if p.lower() == var.lower()]
             if matches:
-                ch_idx = case_config.atm_params.index(matches[0])
+                var_idx = case_config.atm_params.index(matches[0])
+                ch_idx  = t_offset + var_idx   # channel in the full stacked tensor
                 physics_channels.append(X[:, ch_idx:ch_idx + 1, :, :].clone())
                 physics_var_names.append(var)
 
