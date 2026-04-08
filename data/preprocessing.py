@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import torch
@@ -46,7 +46,7 @@ def load_nc_layer(file_path, variable_name):
     target_var = next(
         (var for var in ds.variables if var.lower() == variable_name.lower()), None
     )
-    
+
     # if variable name is not found, the ds is closed
     if target_var is None:
         ds.close()
@@ -61,6 +61,33 @@ def load_nc_layer(file_path, variable_name):
     tensor = torch.from_numpy(np.array(data).astype(np.float32))
     ds.close()
     return tensor
+
+
+def load_nc_all_vars(file_path, variable_names):
+    """
+    Open an NC file ONCE and extract all requested variables in a single pass.
+    Returns a list of tensors in the same order as variable_names, or None if
+    any variable is missing.
+
+    Much faster than calling load_nc_layer() per variable because each
+    xr.open_dataset() call has significant overhead.
+    """
+    ds = xr.open_dataset(file_path)
+    ds_vars_lower = {v.lower(): v for v in ds.variables}
+
+    tensors = []
+    for variable_name in variable_names:
+        target_var = ds_vars_lower.get(variable_name.lower())
+        if target_var is None:
+            ds.close()
+            return None
+        data = ds.variables[target_var][:]
+        if data.ndim == 3:
+            data = data[0]
+        tensors.append(torch.from_numpy(np.array(data).astype(np.float32)))
+
+    ds.close()
+    return tensors
 
 
 def get_param_source_names(param_name, with_subparams):
@@ -256,6 +283,17 @@ def build_and_save_tensors_era5(tensor_path, atm_params, case_config):
     Each hourly NC file contains all ERA5 variables + entln_count on the same grid.
     No ensemble members — ERA5 is a single reanalysis.
 
+    When case_config.lookback_hours > 1, consecutive hours T-2, T-1, T are stacked
+    as input channels so the model sees temporal evolution.  Any gap in the hourly
+    sequence causes the triplet to be skipped.
+
+    Speed strategy: PRELOAD every file ONCE into a list of stacked tensors at the
+    start of each case, then build sliding windows from RAM.  With lookback=3 this
+    eliminates 3× redundant file I/O compared to the naive per-window approach.
+
+    Input channels:  n_vars * lookback_hours  (e.g. 24 vars × 3 hours = 72)
+    Output channels: 1  (binary lightning at hour T)
+
     Expected file path:
         thesis-bucket/Processed_Data/ERA5/{case}/1_hours/{timestamp}.nc
     """
@@ -263,6 +301,8 @@ def build_and_save_tensors_era5(tensor_path, atm_params, case_config):
     all_y_samples = []
     sample_groups = []
 
+    lookback  = getattr(case_config, 'lookback_hours', 1)
+    n_vars    = len(atm_params)
     era5_base = os.path.join(MAIN_PATH, 'thesis-bucket', 'Processed_Data', 'ERA5')
 
     for case in case_config.train_case_names:
@@ -272,40 +312,74 @@ def build_and_save_tensors_era5(tensor_path, atm_params, case_config):
             print(f"WARNING: ERA5 folder not found for {case}: {case_era5_path}")
             continue
 
-        files = sorted([f for f in os.listdir(case_era5_path) if f.endswith('.nc')])
-        print(f"Case {case}: found {len(files)} hourly ERA5 files")
+        # ── Sort files and parse timestamps ───────────────────────────────────
+        raw_files = sorted([f for f in os.listdir(case_era5_path) if f.endswith('.nc')])
 
-        for fname in tqdm(files, desc=case):
-            fpath = os.path.join(case_era5_path, fname)
-
-            # Load all selected ERA5 atmospheric variables
-            current_tensors = []
-            valid = True
-            for param in atm_params:
-                tensor = load_nc_layer(fpath, param)
-                if tensor is None:
-                    print(f"  Missing variable '{param}' in {fname} — skipping")
-                    valid = False
-                    break
-                current_tensors.append(tensor)
-
-            if not valid or len(current_tensors) != len(atm_params):
-                continue
-
-            # Load ENTLN target and binarize (any pulse in cell = 1)
-            y_tensor = load_nc_layer(fpath, 'entln_count')
-            if y_tensor is None:
-                continue
-            y_binary = (y_tensor > 0).float()
-
-            # Extract timestamp from filename for group-aware splitting
+        valid_files = []
+        timestamps  = []
+        for fname in raw_files:
             ts_match = re.search(r'(\d{4}-\d{2}-\d{2}_\d{2}_\d{2}_\d{2})', fname)
-            ts = ts_match.group(1) if ts_match else fname
+            if ts_match:
+                dt = datetime.strptime(ts_match.group(1), '%Y-%m-%d_%H_%M_%S')
+                valid_files.append(fname)
+                timestamps.append(dt)
 
-            x_tensor = torch.stack(current_tensors, dim=0)
+        n_files = len(valid_files)
+        print(f"Case {case}: {n_files} hourly ERA5 files  |  lookback={lookback}h  |  {n_vars} vars")
+
+        # ── PRELOAD every file ONCE into RAM ──────────────────────────────────
+        # cached_x[i]  : torch.Tensor [n_vars, H, W]  — all atm_params for hour i
+        # cached_y[i]  : torch.Tensor [H, W]           — entln_count for hour i
+        #                None if the file was missing a variable
+        cached_x = []
+        cached_y = []
+        for fname in tqdm(valid_files, desc=f"{case} loading"):
+            fpath      = os.path.join(case_era5_path, fname)
+            # Load all atm vars + entln_count in a single xr.open_dataset call
+            all_vars   = load_nc_all_vars(fpath, atm_params + ['entln_count'])
+            if all_vars is None or len(all_vars) != n_vars + 1:
+                cached_x.append(None)
+                cached_y.append(None)
+            else:
+                x_stacked = torch.stack(all_vars[:n_vars], dim=0)  # [n_vars, H, W]
+                cached_x.append(x_stacked)
+                cached_y.append(all_vars[n_vars])                  # [H, W]
+
+        # ── Build sliding windows from the in-memory cache ────────────────────
+        skipped_gap     = 0
+        skipped_missing = 0
+
+        for i in range(lookback - 1, n_files):
+            # Check consecutive hours
+            window_times = timestamps[i - lookback + 1 : i + 1]
+            consecutive  = all(
+                window_times[j + 1] - window_times[j] == timedelta(hours=1)
+                for j in range(len(window_times) - 1)
+            )
+            if not consecutive:
+                skipped_gap += 1
+                continue
+
+            # Check all hours in window loaded successfully
+            window_indices = range(i - lookback + 1, i + 1)
+            if any(cached_x[t] is None for t in window_indices) or cached_y[i] is None:
+                skipped_missing += 1
+                continue
+
+            # Stack all hours: [lookback*n_vars, H, W]  chronological order
+            x_tensor = torch.cat([cached_x[t] for t in window_indices], dim=0)
+            y_binary = (cached_y[i] > 0).float()
+
             all_x_samples.append(x_tensor)
             all_y_samples.append(y_binary.unsqueeze(0))
-            sample_groups.append(f"{case}__{ts}")
+            sample_groups.append(
+                f"{case}__{timestamps[i].strftime('%Y-%m-%d_%H_%M_%S')}"
+            )
+
+        if skipped_gap:
+            print(f"  Skipped {skipped_gap} samples due to gaps in the hourly sequence.")
+        if skipped_missing:
+            print(f"  Skipped {skipped_missing} samples due to missing variables in files.")
 
     print(f"Total ERA5 samples: {len(all_x_samples)}")
 
@@ -316,7 +390,8 @@ def build_and_save_tensors_era5(tensor_path, atm_params, case_config):
     final_x = torch.stack(all_x_samples, dim=0)
     final_y = torch.stack(all_y_samples, dim=0)
 
-    print(f"Final X shape: {final_x.shape}")
+    print(f"Final X shape: {final_x.shape}  "
+          f"({lookback} hours × {n_vars} vars = {lookback * n_vars} channels)")
     print(f"Final Y shape: {final_y.shape}")
 
     os.makedirs(tensor_path, exist_ok=True)

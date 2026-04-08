@@ -7,6 +7,7 @@ import cartopy.feature as cfeature
 import numpy as np
 import torch
 from torch.utils.data import Subset
+from training.contigency_metrics import fss_useful_threshold
 
 
 def _sanitize_batch(xb, yb):
@@ -17,10 +18,10 @@ def _sanitize_batch(xb, yb):
 
 
 def _get_batch(data_loader, batch_index):
-    """Return the requested batch from a data loader."""
-    for current_batch_index, (xb, yb) in enumerate(data_loader):
+    """Return the requested batch from a data loader (handles 2- or 3-element batches)."""
+    for current_batch_index, batch in enumerate(data_loader):
         if current_batch_index == batch_index:
-            return xb, yb
+            return batch[0], batch[1]
     raise IndexError(f"Batch index {batch_index} is out of range for this data loader.")
 
 
@@ -28,7 +29,8 @@ def _find_sample_with_lightning(data_loader, occurrence_index=0):
     """Return the nth sample whose target contains at least one lightning pixel."""
     found_count = 0
 
-    for current_batch_index, (xb, yb) in enumerate(data_loader):
+    for current_batch_index, batch in enumerate(data_loader):
+        xb, yb = batch[0], batch[1]
         _, yb = _sanitize_batch(xb, yb)
         yb = (yb > 0).float()
 
@@ -676,22 +678,23 @@ def inspect_geo_probability_map(
         output_dir, f"{prefix}_batch{batch_index}_sample{sample_index}_maps.png"
     )
 
-    # plotting
-    panel_count = 2
+    # Real lightning pixels as a masked array — transparent where no lightning
+    true_masked = np.ma.masked_where(true_map < 0.5, true_map)
+    n_lightning  = int(true_map.sum())
+    n_pred       = int(pred_binary_map.sum())
+
+    # plotting — 2 panels, real lightning pixels overlaid as red on both
     fig, axes = plt.subplots(
-        1,
-        panel_count,
-        figsize=(6.2 * panel_count, 5.5),
+        1, 2,
+        figsize=(6.5 * 2, 5.5),
         subplot_kw={"projection": ccrs.PlateCarree()},
     )
-    if panel_count == 1:
-        axes = [axes]
 
     extent = [min_lon, max_lon, min_lat, max_lat]
 
-    # probability map
-    _apply_geo_axis_style(axes[-2], min_lon, max_lon, min_lat, max_lat)
-    im_overlay = axes[-2].imshow(
+    # ── Panel 1: Predicted probability + real lightning pixels in red ─────
+    _apply_geo_axis_style(axes[0], min_lon, max_lon, min_lat, max_lat)
+    im_prob = axes[0].imshow(
         prob_map,
         cmap=probability_cmap,
         norm=probability_norm,
@@ -699,46 +702,33 @@ def inspect_geo_probability_map(
         origin="lower",
         transform=ccrs.PlateCarree(),
     )
-    axes[-2].contour(
-        true_map,
-        levels=[0.5],
-        colors="cyan",
-        linewidths=1,
-        extent=extent,
-        origin="lower",
-        transform=ccrs.PlateCarree(),
+    axes[0].imshow(
+        true_masked,
+        cmap=mcolors.ListedColormap(["red"]),
+        vmin=0.5, vmax=1.0,
+        extent=extent, origin="lower", transform=ccrs.PlateCarree(),
+        alpha=0.85,
     )
-    axes[-2].set_title("Probabilities + Truth Contour")
-    plt.colorbar(
-        im_overlay,
-        ax=axes[-2],
-        fraction=0.046,
-        pad=0.04,
-        ticks=probability_bounds,
-    )
+    axes[0].set_title(f"Predicted Probability  (red = observed lightning, {n_lightning} cells)")
+    plt.colorbar(im_prob, ax=axes[0], fraction=0.046, pad=0.04, ticks=probability_bounds)
 
-    # binary decision map
-    _apply_geo_axis_style(axes[-1], min_lon, max_lon, min_lat, max_lat)
-    im_binary = axes[-1].imshow(
+    # ── Panel 2: Binary prediction + real lightning pixels in red ─────────
+    _apply_geo_axis_style(axes[1], min_lon, max_lon, min_lat, max_lat)
+    axes[1].imshow(
         pred_binary_map,
-        cmap="gray",
-        vmin=0.0,
-        vmax=1.0,
-        extent=extent,
-        origin="lower",
-        transform=ccrs.PlateCarree(),
+        cmap="gray", vmin=0.0, vmax=1.0,
+        extent=extent, origin="lower", transform=ccrs.PlateCarree(),
     )
-    axes[-1].contour(
-        true_map,
-        levels=[0.5],
-        colors="red",
-        linewidths=1,
-        extent=extent,
-        origin="lower",
-        transform=ccrs.PlateCarree(),
+    axes[1].imshow(
+        true_masked,
+        cmap=mcolors.ListedColormap(["red"]),
+        vmin=0.5, vmax=1.0,
+        extent=extent, origin="lower", transform=ccrs.PlateCarree(),
+        alpha=0.85,
     )
-    axes[-1].set_title(f"Pred >= {decision_threshold}")
-    plt.colorbar(im_binary, ax=axes[-1], fraction=0.046, pad=0.04)
+    axes[1].set_title(
+        f"Pred >= {decision_threshold} ({n_pred} cells)  (red = observed lightning)"
+    )
 
     fig.tight_layout()
     fig.savefig(figure_path, dpi=150, bbox_inches="tight")
@@ -768,3 +758,112 @@ def inspect_geo_probability_map(
         "original_sample_index": original_sample_index,
         "sample_label": sample_label,
     }
+
+
+# ── FSS curve ─────────────────────────────────────────────────────────────────
+
+def plot_fss_curve(fss_results, true_binary_all, output_dir="training/visualizations",
+                   prefix="val", cell_size_km=25):
+    """
+    Plot FSS vs neighbourhood size.
+
+    Parameters
+    ----------
+    fss_results     : dict {n: fss_value}  from calc_fss_from_arrays
+    true_binary_all : [N, H, W] array of binary observations (to compute useful threshold)
+    output_dir      : where to save the figure
+    prefix          : filename prefix
+    cell_size_km    : approximate grid cell size in km (ERA5 ≈ 25 km at mid-latitudes)
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    ns       = sorted(fss_results.keys())
+    fss_vals = [fss_results[n] for n in ns]
+    scales_km = [n * cell_size_km for n in ns]
+
+    useful = fss_useful_threshold(true_binary_all)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(scales_km, fss_vals, marker='o', color='steelblue', linewidth=2, label='FSS')
+    ax.axhline(useful, color='red', linestyle='--', linewidth=1.5,
+               label=f'Useful skill threshold ({useful:.3f})')
+    ax.axhline(0.5, color='gray', linestyle=':', linewidth=1, label='FSS = 0.5')
+    ax.set_xlabel('Neighbourhood scale (km)', fontsize=12)
+    ax.set_ylabel('Fractions Skill Score (FSS)', fontsize=12)
+    ax.set_title('FSS vs. Neighbourhood Scale', fontsize=13)
+    ax.set_ylim(0, 1)
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    figure_path = os.path.join(output_dir, f"{prefix}_fss_curve.png")
+    fig.tight_layout()
+    fig.savefig(figure_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"Saved FSS curve to: {figure_path}")
+    print("FSS by scale:")
+    for n, km, fss in zip(ns, scales_km, fss_vals):
+        marker = " <- skillful" if fss >= useful else ""
+        print(f"  n={n:2d} ({km:4d} km): FSS = {fss:.4f}{marker}")
+    print(f"  Useful-skill threshold: {useful:.4f}")
+
+    return figure_path
+
+
+# ── Reliability diagram ───────────────────────────────────────────────────────
+
+def plot_reliability_diagram(reliability_data, output_dir="training/visualizations",
+                              prefix="val"):
+    """
+    Plot a reliability (attributes) diagram.
+
+    Parameters
+    ----------
+    reliability_data : dict from calc_reliability_data
+    output_dir       : where to save
+    prefix           : filename prefix
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    bin_centers = reliability_data['bin_centers']
+    obs_freq    = reliability_data['obs_frequency']
+    fcst_freq   = reliability_data['forecast_frequency']
+    base_rate   = reliability_data['base_rate']
+
+    has_data = ~np.isnan(obs_freq)
+
+    fig, (ax_rel, ax_sharp) = plt.subplots(
+        2, 1, figsize=(6, 8),
+        gridspec_kw={'height_ratios': [3, 1]},
+        sharex=True,
+    )
+
+    # ── Reliability panel ──
+    ax_rel.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Perfect reliability')
+    ax_rel.axhline(base_rate, color='gray', linestyle=':', linewidth=1,
+                   label=f'Climatology ({base_rate:.4f})')
+    ax_rel.fill_between([0, 1], [0, 1], [base_rate, base_rate],
+                        alpha=0.07, color='green', label='Positive skill region')
+    ax_rel.plot(bin_centers[has_data], obs_freq[has_data],
+                marker='o', color='steelblue', linewidth=2, label='Model')
+    ax_rel.set_ylabel('Observed frequency', fontsize=11)
+    ax_rel.set_title('Reliability Diagram', fontsize=13)
+    ax_rel.set_xlim(0, 1)
+    ax_rel.set_ylim(0, 1)
+    ax_rel.legend(fontsize=9)
+    ax_rel.grid(alpha=0.3)
+
+    # ── Sharpness (histogram) panel ──
+    ax_sharp.bar(bin_centers, fcst_freq, width=0.09, color='steelblue', alpha=0.7)
+    ax_sharp.set_xlabel('Predicted probability', fontsize=11)
+    ax_sharp.set_ylabel('Forecast fraction', fontsize=10)
+    ax_sharp.set_title('Sharpness', fontsize=11)
+    ax_sharp.grid(alpha=0.3)
+
+    figure_path = os.path.join(output_dir, f"{prefix}_reliability.png")
+    fig.tight_layout()
+    fig.savefig(figure_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"Saved reliability diagram to: {figure_path}")
+    return figure_path

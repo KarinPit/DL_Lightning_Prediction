@@ -10,11 +10,14 @@ from config.constants import MAIN_PATH
 from config.experiment import CASE_CONFIG, MODEL_CONFIG, RUN_CONFIG
 from data.preprocessing import build_and_save_tensors, build_and_save_tensors_era5, mean_std_norm
 from models.unet import UNet, FocalLoss, GaussianSmoothing
-from training.train import train_model
+from training.train import train_model, collect_val_predictions
+from training.contigency_metrics import calc_fss_from_arrays, calc_reliability_data
 from training.visualization import (
     inspect_probability_maps,
     plot_original_maps_for_loader_sample,
     inspect_geo_probability_map,
+    plot_fss_curve,
+    plot_reliability_diagram,
 )
 
 
@@ -254,6 +257,39 @@ if __name__ == "__main__":
             X_raw = X.clone()
             y_raw = y.clone()
 
+        # ── Physics raw channels: extract before normalisation ─────────────────
+        # These are the ERA5 variables used to build "physically impossible" masks.
+        # We extract them now (before in-place normalisation) so the values are raw.
+        # With lookback > 1 the tensor has shape [N, lookback*n_vars, H, W].
+        # We always use the LAST time step (hour T) for physics — it is the most
+        # recent observation and the one that corresponds to the target label.
+        PHYSICS_VARS_WANTED = ['cape', 'kx', 'tciw', 'crr', 'w_500', 'r_700', 'r_850']
+        lookback = getattr(case_config, 'lookback_hours', 1)
+        n_atm    = len(case_config.atm_params)
+        t_offset = (lookback - 1) * n_atm   # first channel index of hour T
+
+        physics_channels = []
+        physics_var_names = []
+        for var in PHYSICS_VARS_WANTED:
+            # Case-insensitive search (handles 'CAPE2D' in WRF configs too)
+            matches = [p for p in case_config.atm_params if p.lower() == var.lower()]
+            if matches:
+                var_idx = case_config.atm_params.index(matches[0])
+                ch_idx  = t_offset + var_idx   # channel in the full stacked tensor
+                physics_channels.append(X[:, ch_idx:ch_idx + 1, :, :].clone())
+                physics_var_names.append(var)
+
+        if physics_channels and model_config.use_physics_loss:
+            physics_raw = torch.cat(physics_channels, dim=1)  # [N, K, H, W]
+            print(f"Physics loss enabled — extracted {len(physics_var_names)} constraint vars: "
+                  f"{physics_var_names}")
+        else:
+            physics_raw = torch.zeros(X.shape[0], 1, X.shape[2], X.shape[3])
+            physics_var_names = []
+            if model_config.use_physics_loss:
+                print("WARNING: use_physics_loss=True but none of the physics variables "
+                      "were found in atm_params — physics penalty will have no effect.")
+
         # compute mean and std of each feature
         train_X = X[train_idx]
         means, stds = mean_std_norm(train_X)
@@ -283,6 +319,9 @@ if __name__ == "__main__":
         # smoother = GaussianSmoothing(kernel_size=3, sigma=1)
         # y_smooth = smoother(y)
 
+        print(X.shape)  # should be (N_samples, N_channels, H, W)
+        print(y.shape)
+
         save_tensor_stats_report(
             X=X,
             y=y,
@@ -292,8 +331,8 @@ if __name__ == "__main__":
             groups=[train_groups, val_groups],
         )
 
-        # Data Loaders
-        full_dataset = TensorDataset(X, y)
+        # Include raw physics variables as third element so loops can build physics masks
+        full_dataset = TensorDataset(X, y, physics_raw)
         train_loader = DataLoader(
             Subset(full_dataset, train_idx),
             batch_size=model_config.batch_size,
@@ -306,21 +345,14 @@ if __name__ == "__main__":
             shuffle=False,
         )
 
-        ######## SANITY CHECKS
-
-        # Check shape of tensors
-        print(f'X Tensor shape {X.shape}\n')
-        print(f'y Tensor shape {y.shape}\n')
-
         # Check ratio between number of lightning and number of total pixels
         total_pixels = 0
         total_lightning = 0
-        for X, y in train_loader:
+        for batch in train_loader:
+            y = batch[1]
             total_pixels += y.numel()
             total_lightning += y.sum().item()
         print(f"Ratio: {total_pixels/total_lightning:.1f}\n")
-
-        ########################
 
         if run_config.to_train:
             # run train and evaluation
@@ -332,11 +364,62 @@ if __name__ == "__main__":
                 criterion=criterion,
                 num_epochs=model_config.num_epochs,
                 device=device,
-                decision_threshold=model_config.decision_threshold,  # change threshold.
-                scheduler=scheduler
+                decision_threshold=model_config.decision_threshold,
+                scheduler=scheduler,
+                use_physics_loss=model_config.use_physics_loss,
+                use_physics_mask=model_config.use_physics_mask,
+                physics_weight=model_config.physics_weight,
+                physics_var_names=physics_var_names,
+                cape_min=model_config.cape_min,
+                ki_min=model_config.ki_min,
+                tciw_min=model_config.tciw_min,
+                crr_min=model_config.crr_min,
+                w500_max=model_config.w500_max,
+                r700_min=model_config.r700_min,
+                r850_min=model_config.r850_min,
             )
             # save the model's state for future runs
             torch.save(model.state_dict(), weights_save_path)
+
+            # ── Post-training: FSS and Reliability diagram ────────────────────
+            print("\nComputing FSS and Reliability diagram on validation set...")
+            all_probs_np, all_labels_np = collect_val_predictions(
+                model=model,
+                data_loader=val_loader,
+                device=device,
+                use_physics_loss=model_config.use_physics_loss,
+                use_physics_mask=model_config.use_physics_mask,
+                physics_var_names=physics_var_names,
+                cape_min=model_config.cape_min,
+                ki_min=model_config.ki_min,
+                tciw_min=model_config.tciw_min,
+                crr_min=model_config.crr_min,
+                w500_max=model_config.w500_max,
+                r700_min=model_config.r700_min,
+                r850_min=model_config.r850_min,
+            )
+
+            # FSS at neighbourhood sizes 1–9 (each cell ≈ 25 km for ERA5)
+            fss_results = calc_fss_from_arrays(
+                all_probs_np, all_labels_np,
+                threshold=model_config.decision_threshold,
+                neighborhood_sizes=[1, 3, 5, 7, 9],
+            )
+            plot_fss_curve(
+                fss_results,
+                all_labels_np,
+                output_dir="training/visualizations",
+                prefix=f"{experiment_tag}",
+                cell_size_km=25,
+            )
+
+            # Reliability diagram
+            reliability_data = calc_reliability_data(all_probs_np, all_labels_np, n_bins=10)
+            plot_reliability_diagram(
+                reliability_data,
+                output_dir="training/visualizations",
+                prefix=f"{experiment_tag}",
+            )
 
         else:
             if not os.path.exists(weights_save_path):
@@ -348,55 +431,66 @@ if __name__ == "__main__":
             model.load_state_dict(torch.load(weights_save_path, map_location=device))
             model.eval()
 
-            inspection_result = inspect_probability_maps(
-                model,
-                val_loader,
-                device,
-                output_dir="training/visualizations",
-                batch_index=1,
-                sample_index=0,
-                input_channel=1,
-                decision_threshold=model_config.decision_threshold,
-                thresholds=model_config.visualization_thresholds,
-                prefix=f"val_{experiment_tag}",
-                require_lightning=True,
-                lightning_occurrence_index=0,
-                channel_names=case_config.input_channel_names,
-                sample_metadata=sample_groups,
-            )
+            # Visualise multiple lightning samples from the validation set
+            NUM_VIZ_SAMPLES = 10  # how many different lightning events to plot
 
-            inspect_geo_probability_map(
-                model,
-                val_loader,
-                device,
-                output_dir="training/visualizations",
-                batch_index=1,
-                sample_index=0,
-                input_channel=1,
-                decision_threshold=model_config.decision_threshold,
-                thresholds=model_config.visualization_thresholds,
-                prefix=f"val_{experiment_tag}",
-                require_lightning=True,
-                lightning_occurrence_index=0,
-                channel_names=case_config.input_channel_names,
-                sample_metadata=sample_groups,
-                min_lat=CASE_CONFIG.min_lat,
-                max_lat=CASE_CONFIG.max_lat,
-                min_lon=CASE_CONFIG.min_lon,
-                max_lon=CASE_CONFIG.max_lon,
-            )
+            for viz_i in range(NUM_VIZ_SAMPLES):
+                try:
+                    inspection_result = inspect_probability_maps(
+                        model,
+                        val_loader,
+                        device,
+                        output_dir="training/visualizations",
+                        batch_index=1,
+                        sample_index=0,
+                        input_channel=1,
+                        decision_threshold=model_config.decision_threshold,
+                        thresholds=model_config.visualization_thresholds,
+                        prefix=f"val_{experiment_tag}_s{viz_i:02d}",
+                        require_lightning=True,
+                        lightning_occurrence_index=viz_i,
+                        channel_names=case_config.input_channel_names,
+                        sample_metadata=sample_groups,
+                    )
 
-            if run_config.plot_raw_tensors:
-                plot_original_maps_for_loader_sample(
-                    X_raw,
-                    y_raw,
-                    val_loader,
-                    inspection_result=inspection_result,
-                    output_dir="training/visualizations",
-                    prefix="raw",
-                    channel_names=case_config.input_channel_names,
-                    sample_metadata=sample_groups,
-                )
+                    inspect_geo_probability_map(
+                        model,
+                        val_loader,
+                        device,
+                        output_dir="training/visualizations",
+                        batch_index=1,
+                        sample_index=0,
+                        input_channel=1,
+                        decision_threshold=model_config.decision_threshold,
+                        thresholds=model_config.visualization_thresholds,
+                        prefix=f"val_{experiment_tag}_s{viz_i:02d}",
+                        require_lightning=True,
+                        lightning_occurrence_index=viz_i,
+                        channel_names=case_config.input_channel_names,
+                        sample_metadata=sample_groups,
+                        min_lat=CASE_CONFIG.min_lat,
+                        max_lat=CASE_CONFIG.max_lat,
+                        min_lon=CASE_CONFIG.min_lon,
+                        max_lon=CASE_CONFIG.max_lon,
+                    )
+
+                    if run_config.plot_raw_tensors and viz_i == 0:
+                        # Raw tensor comparison only for the first sample (expensive)
+                        plot_original_maps_for_loader_sample(
+                            X_raw,
+                            y_raw,
+                            val_loader,
+                            inspection_result=inspection_result,
+                            output_dir="training/visualizations",
+                            prefix="raw",
+                            channel_names=case_config.input_channel_names,
+                            sample_metadata=sample_groups,
+                        )
+
+                except ValueError:
+                    # Fewer than NUM_VIZ_SAMPLES lightning events in val set — stop early
+                    print(f"Only {viz_i} lightning samples found in val set — stopping visualisation.")
+                    break
 
     else:
         if case_config.data_source == "era5":

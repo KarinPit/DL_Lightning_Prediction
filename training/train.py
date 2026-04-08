@@ -56,12 +56,187 @@ def _finalize_epoch_metrics(stats):
     }
 
 
-def evaluate_model(model, data_loader, criterion, device, decision_threshold=0.5):
+def _build_impossible_mask(
+    physics_raw,
+    physics_var_names,
+    cape_min,
+    ki_min,
+    tciw_min,
+    crr_min,
+    w500_max,
+    r700_min,
+    r850_min,
+):
+    """
+    Build a boolean CPU tensor [B, 1, H, W] where True = lightning physically impossible.
+
+    physics_raw       : [B, K, H, W] tensor on CPU — raw (un-normalised) values of
+                        the K physics variables listed in physics_var_names.
+    physics_var_names : list[str] of length K — variable name for each channel in physics_raw.
+
+    Rules (each threshold may be None → that constraint is skipped):
+      cape  < cape_min   → impossible   (thermodynamic instability required)
+      kx    < ki_min     → impossible   (K-Index thunderstorm potential)
+      tciw  < tciw_min   → impossible   (ice water for charge separation)
+      crr   <= crr_min   → impossible   (active convective core: CRR must be > 0)
+      w_500 >= w500_max  → impossible   (ERA5 omega: negative = upward; >= -0.1 = subsidence)
+      r_700 < r700_min   → impossible   (mid-level moisture)
+      r_850 < r850_min   → impossible   (low-level moisture)
+    """
+    idx = {name: i for i, name in enumerate(physics_var_names)}
+    B, _, H, W = physics_raw.shape
+    impossible = torch.zeros(B, 1, H, W, dtype=torch.bool)
+
+    def chan(name):
+        """Extract [B, 1, H, W] slice for variable `name` if present."""
+        if name in idx:
+            return physics_raw[:, idx[name]:idx[name] + 1, :, :]
+        return None
+
+    if cape_min is not None:
+        c = chan('cape')
+        if c is not None:
+            impossible |= (c < cape_min)
+
+    if ki_min is not None:
+        c = chan('kx')
+        if c is not None:
+            impossible |= (c < ki_min)
+
+    if tciw_min is not None:
+        c = chan('tciw')
+        if c is not None:
+            impossible |= (c < tciw_min)
+
+    if crr_min is not None:
+        c = chan('crr')
+        if c is not None:
+            # CRR must be strictly greater than crr_min (active convective core)
+            impossible |= (c <= crr_min)
+
+    if w500_max is not None:
+        c = chan('w_500')
+        if c is not None:
+            # ERA5 omega: negative = upward motion; >= w500_max means subsidence / no updraft
+            impossible |= (c >= w500_max)
+
+    if r700_min is not None:
+        c = chan('r_700')
+        if c is not None:
+            impossible |= (c < r700_min)
+
+    if r850_min is not None:
+        c = chan('r_850')
+        if c is not None:
+            impossible |= (c < r850_min)
+
+    return impossible  # bool [B, 1, H, W] on CPU
+
+
+def _apply_physics_mask(binary_preds, probs, impossible, device):
+    """
+    Zero out predictions in cells where lightning is physically impossible.
+    impossible : bool [B, 1, H, W] CPU tensor from _build_impossible_mask.
+    """
+    possible = (~impossible).int().to(device)
+    binary_preds = binary_preds * possible
+    probs = probs * possible.float()
+    return binary_preds, probs
+
+
+def _physics_penalty(logits, impossible, device):
+    """
+    Soft physics penalty: penalise any positive predicted probability in cells
+    where lightning is physically impossible.  Differentiable — added to main loss.
+    impossible : bool [B, 1, H, W] CPU tensor from _build_impossible_mask.
+    """
+    impossible_float = impossible.float().to(device)
+    probs = torch.sigmoid(logits)
+    penalty = (probs * impossible_float).mean()
+    return penalty
+
+
+def collect_val_predictions(
+    model,
+    data_loader,
+    device,
+    use_physics_loss=False,
+    use_physics_mask=False,
+    physics_var_names=None,
+    cape_min=None,
+    ki_min=None,
+    tciw_min=None,
+    crr_min=None,
+    w500_max=None,
+    r700_min=None,
+    r850_min=None,
+):
+    """
+    Run model on a loader and return all predicted probabilities and true labels
+    as numpy arrays of shape [N, H, W] (squeezed from [N, 1, H, W]).
+
+    Physics mask is applied to probabilities when use_physics_loss=True,
+    giving an honest view of what the model actually outputs after constraints.
+    Used for FSS and reliability diagram computation after training.
+    """
+    model.eval()
+    all_probs  = []
+    all_labels = []
+
+    with torch.no_grad():
+        for batch in tqdm(data_loader, desc="Collecting predictions", unit="batch", leave=False):
+            xb, yb        = batch[0], batch[1]
+            physics_raw_b = batch[2] if len(batch) > 2 else None
+
+            xb = xb.to(device)
+            yb = yb.to(device)
+            xb, yb = _sanitize_batch(xb, yb)
+            yb = (yb > 0).float()
+
+            logits = model(xb)
+            probs  = torch.sigmoid(logits)
+
+            if use_physics_mask and use_physics_loss and physics_var_names and physics_raw_b is not None:
+                impossible = _build_impossible_mask(
+                    physics_raw_b, physics_var_names,
+                    cape_min, ki_min, tciw_min, crr_min, w500_max, r700_min, r850_min,
+                )
+                _, probs = _apply_physics_mask((probs > 0.5).int(), probs, impossible, device)
+
+            all_probs.append(probs.squeeze(1).detach().cpu().numpy())
+            all_labels.append(yb.squeeze(1).detach().cpu().numpy())
+
+    return np.concatenate(all_probs, axis=0), np.concatenate(all_labels, axis=0)
+
+
+def evaluate_model(
+    model,
+    data_loader,
+    criterion,
+    device,
+    decision_threshold=0.5,
+    use_physics_loss=False,
+    use_physics_mask=False,
+    physics_weight=1.0,
+    physics_var_names=None,
+    cape_min=None,
+    ki_min=None,
+    tciw_min=None,
+    crr_min=None,
+    w500_max=None,
+    r700_min=None,
+    r850_min=None,
+):
     """
     Evaluate model on a loader and return averaged loss + metrics for one epoch.
-    Metrics:
-        - CSI, FAR, POD use binary predictions
-        - BS, BSS use probabilistic predictions
+
+    When use_physics_loss=True the DataLoader must yield (xb, yb, physics_raw) 3-tuples,
+    where physics_raw is [B, K, H, W] with raw (un-normalised) values for the variables
+    listed in physics_var_names.
+
+    Two physics effects are applied:
+      - Soft penalty added to loss (differentiable training signal)
+      - Hard mask applied to predicted probabilities / binary decisions for metrics
     """
     model.eval()
 
@@ -79,14 +254,32 @@ def evaluate_model(model, data_loader, criterion, device, decision_threshold=0.5
     }
 
     with torch.no_grad():
-        for xb, yb in tqdm(data_loader, desc="Validation", unit="batch", leave=False):
+        for batch in tqdm(data_loader, desc="Validation", unit="batch", leave=False):
+            xb, yb = batch[0], batch[1]
+            physics_raw_b = batch[2] if len(batch) > 2 else None
+
             xb = xb.to(device)
             yb = yb.to(device)
             xb, yb = _sanitize_batch(xb, yb)
             yb = (yb > 0).float()
 
             logits = model(xb)
-            loss = criterion(logits, yb)
+            main_loss = criterion(logits, yb)
+
+            impossible = None
+            if use_physics_loss and physics_raw_b is not None and physics_var_names:
+                impossible = _build_impossible_mask(
+                    physics_raw_b, physics_var_names,
+                    cape_min, ki_min, tciw_min, crr_min, w500_max, r700_min, r850_min,
+                )
+                if physics_weight > 0:
+                    penalty = _physics_penalty(logits, impossible, device)
+                    loss = main_loss + physics_weight * penalty
+                else:
+                    loss = main_loss
+            else:
+                loss = main_loss
+
             loss = _safe_loss(loss)
             if loss is None:
                 continue
@@ -100,6 +293,10 @@ def evaluate_model(model, data_loader, criterion, device, decision_threshold=0.5
 
             # Convert probabilities to binary predictions for contingency metrics
             binary_preds = (probs > decision_threshold).int()
+
+            # Hard physics mask: zero out predictions in physically impossible cells
+            if use_physics_mask and impossible is not None:
+                binary_preds, probs = _apply_physics_mask(binary_preds, probs, impossible, device)
 
             # Move to CPU / NumPy for metric functions
             probs_np = probs.detach().cpu().numpy()
@@ -133,7 +330,18 @@ def train_model(
     num_epochs,
     device,
     decision_threshold=0.5,
-    scheduler= None
+    scheduler=None,
+    use_physics_loss=False,
+    use_physics_mask=False,
+    physics_weight=1.0,
+    physics_var_names=None,
+    cape_min=None,
+    ki_min=None,
+    tciw_min=None,
+    crr_min=None,
+    w500_max=None,
+    r700_min=None,
+    r850_min=None,
 ):
     """
     Train the model and track epoch-level metrics.
@@ -173,7 +381,10 @@ def train_model(
 
         print(f"Starting Epoch {epoch}...")
 
-        for xb, yb in tqdm(train_loader, desc=f"Epoch {epoch}/{num_epochs}", unit="batch"):
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch}/{num_epochs}", unit="batch"):
+            xb, yb = batch[0], batch[1]
+            physics_raw_b = batch[2] if len(batch) > 2 else None
+
             xb = xb.to(device)
             yb = yb.to(device)
             xb, yb = _sanitize_batch(xb, yb)
@@ -182,7 +393,22 @@ def train_model(
             optimizer.zero_grad()
 
             logits = model(xb)
-            loss = criterion(logits, yb)
+            main_loss = criterion(logits, yb)
+
+            impossible = None
+            if use_physics_loss and physics_raw_b is not None and physics_var_names:
+                impossible = _build_impossible_mask(
+                    physics_raw_b, physics_var_names,
+                    cape_min, ki_min, tciw_min, crr_min, w500_max, r700_min, r850_min,
+                )
+                if physics_weight > 0:
+                    penalty = _physics_penalty(logits, impossible, device)
+                    loss = main_loss + physics_weight * penalty
+                else:
+                    loss = main_loss
+            else:
+                loss = main_loss
+
             loss = _safe_loss(loss)
             if loss is None:
                 continue
@@ -196,6 +422,10 @@ def train_model(
 
             probs = torch.sigmoid(logits)
             binary_preds = (probs > decision_threshold).int()
+
+            # Hard physics mask applied to training metrics (not to gradients)
+            if use_physics_mask and impossible is not None:
+                binary_preds, probs = _apply_physics_mask(binary_preds, probs, impossible, device)
 
             probs_np = probs.detach().cpu().numpy()
             binary_preds_np = binary_preds.detach().cpu().numpy()
@@ -224,6 +454,17 @@ def train_model(
             criterion=criterion,
             device=device,
             decision_threshold=decision_threshold,
+            use_physics_loss=use_physics_loss,
+            use_physics_mask=use_physics_mask,
+            physics_weight=physics_weight,
+            physics_var_names=physics_var_names,
+            cape_min=cape_min,
+            ki_min=ki_min,
+            tciw_min=tciw_min,
+            crr_min=crr_min,
+            w500_max=w500_max,
+            r700_min=r700_min,
+            r850_min=r850_min,
         )
 
         # Step scheduler based on val CSI

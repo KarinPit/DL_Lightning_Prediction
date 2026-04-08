@@ -23,6 +23,20 @@ class ModelConfig:
     visualization_thresholds: list[float] = field(
         default_factory=lambda: [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
     )
+    # ── Physics-aware training ────────────────────────────────────────────────
+    use_physics_loss: bool = False    # soft penalty added to loss during training
+    use_physics_mask: bool = False    # hard mask — zero predictions in impossible cells at inference
+    physics_weight: float = 1.0      # weight of physics penalty relative to main BCE loss
+    # Per-constraint thresholds — set to None to disable an individual constraint.
+    # Semantics: value < _min  (or >= _max) → lightning physically impossible in that cell.
+    cape_min: Optional[float] = 100.0   # J/kg  — CAPE: thermodynamic instability required
+    ki_min:   Optional[float] = 20.0    # dimensionless K-Index: thunderstorm potential
+    tciw_min: Optional[float] = 0.01   # kg/m² — ice-water content: charge separation needs ice
+    crr_min:  Optional[float] = 0.0    # mm/h  — convective rain > 0: active convective core required
+    w500_max: Optional[float] = -0.1   # Pa/s  — ERA5 omega at 500 hPa (negative = upward);
+                                        #         >= this threshold means subsidence / no updraft
+    r700_min: Optional[float] = 50.0   # %     — relative humidity at 700 hPa: mid-level moisture
+    r850_min: Optional[float] = 60.0   # %     — relative humidity at 850 hPa: low-level moisture
 
 
 @dataclass(frozen=True)
@@ -77,11 +91,24 @@ class CaseConfig:
     def is_multi_case(self):
         return len(self.train_case_names) > 1
 
+    lookback_hours: int = 1   # how many consecutive hours to stack as input channels
+                               # 1 = single snapshot, 3 = T-2, T-1, T stacked
+
     @property
     def input_channel_names(self):
-        channel_names = []
+        """Channel names in the order they appear in the X tensor."""
+        base_names = []
         for param in self.atm_params:
-            channel_names.extend(self.with_subparams.get(param, [param]))
+            base_names.extend(self.with_subparams.get(param, [param]))
+
+        if self.lookback_hours == 1:
+            return base_names
+
+        # Stack T-(lookback-1), ..., T-1, T — label each channel with its time offset
+        channel_names = []
+        for t_back in range(self.lookback_hours - 1, -1, -1):
+            suffix = f"_T-{t_back}" if t_back > 0 else "_T"
+            channel_names.extend([f"{n}{suffix}" for n in base_names])
         return channel_names
 
     @property
