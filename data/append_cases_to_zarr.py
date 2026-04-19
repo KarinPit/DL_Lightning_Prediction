@@ -230,6 +230,8 @@ def append_case(case_name, start_str, end_str, arco_ds):
         print(f"  ERA5 append done ✓")
 
     # ── Lightning ─────────────────────────────────────────────────────────────
+    import zarr as zarr_lib
+
     ds_light = xr.open_zarr(LIGHTNING_ZARR)
     existing_ltimes = pd.DatetimeIndex(ds_light.time.values)
     lats = ds_light.lat.values
@@ -237,15 +239,11 @@ def append_case(case_name, start_str, end_str, arco_ds):
     ds_light.close()
 
     light_already = ((existing_ltimes >= case_start) & (existing_ltimes <= case_end)).any()
-    if light_already:
-        print(f"  Already in Lightning.zarr — skipping lightning append.")
-        return
 
     # Find ENTLN file
     entln_path = find_entln_for_case(case_name, year)
     if entln_path:
         df_entln = load_entln_mat(entln_path)
-        # Filter to case period only
         df_entln = df_entln[(df_entln.UTC >= case_start) & (df_entln.UTC <= case_end)]
         print(f"  ENTLN filtered to case: {len(df_entln):,} pulses")
     else:
@@ -260,14 +258,25 @@ def append_case(case_name, start_str, end_str, arco_ds):
         grids.append(bin_to_grid(df_entln[mask], lats, lons))
 
     data = np.stack(grids, axis=0)
-    ds_light_new = xr.Dataset(
-        {'entln_count': (['time', 'lat', 'lon'], data)},
-        coords={'time': case_times.values, 'lat': lats, 'lon': lons}
-    ).chunk({'time': TIME_CHUNK, 'lat': -1, 'lon': -1})
 
-    print(f"  Appending {len(case_times)} lightning timesteps to {LIGHTNING_ZARR}...")
-    ds_light_new.to_zarr(LIGHTNING_ZARR, append_dim='time')
-    print(f"  Lightning append done ✓")
+    if light_already:
+        # Timestamps exist — overwrite in-place (handles zeros from a failed previous run)
+        print(f"  Already in Lightning.zarr — overwriting in-place with real ENTLN data...")
+        indices = np.where((existing_ltimes >= case_start) & (existing_ltimes <= case_end))[0]
+        store = zarr_lib.open(LIGHTNING_ZARR, mode='r+')
+        for i, zarr_idx in enumerate(indices):
+            store['entln_count'][zarr_idx] = grids[i]
+        total_lightning = (data > 0).sum()
+        print(f"  Overwritten {len(indices)} timesteps  ({total_lightning} non-zero grid cells) ✓")
+    else:
+        # New timestamps — append
+        ds_light_new = xr.Dataset(
+            {'entln_count': (['time', 'lat', 'lon'], data)},
+            coords={'time': case_times.values, 'lat': lats, 'lon': lons}
+        ).chunk({'time': TIME_CHUNK, 'lat': -1, 'lon': -1})
+        print(f"  Appending {len(case_times)} lightning timesteps to {LIGHTNING_ZARR}...")
+        ds_light_new.to_zarr(LIGHTNING_ZARR, append_dim='time')
+        print(f"  Lightning append done ✓")
 
 
 def verify():
@@ -278,10 +287,14 @@ def verify():
         times = pd.DatetimeIndex(ds.time.values)
         print(f"  [{label}] {len(times)} timesteps  "
               f"{times.min().date()} → {times.max().date()}")
-        # Check case dates are present
+        # Check case dates are present + lightning is non-zero
         for name, start, end in MISSING_CASES:
             mask = (times >= pd.Timestamp(start)) & (times <= pd.Timestamp(end) + pd.Timedelta(hours=23))
-            print(f"    {name}: {mask.sum()} timesteps {'✓' if mask.any() else '✗ MISSING'}")
+            status = '✓' if mask.any() else '✗ MISSING'
+            if label == 'Lightning' and mask.any():
+                max_val = ds['entln_count'].isel(time=np.where(mask)[0]).values.max()
+                status += f'  max_count={max_val:.0f}' + (' ✓' if max_val > 0 else ' ✗ ALL ZEROS!')
+            print(f"    {name}: {mask.sum()} timesteps {status}")
         ds.close()
 
 
