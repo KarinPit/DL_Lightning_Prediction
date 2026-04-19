@@ -12,3 +12,4 @@ geopandas
 netCDF4
 tqdm
 torch
+gcsfs
