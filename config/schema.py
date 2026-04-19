@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 
 
 @dataclass(frozen=True)
@@ -94,23 +94,26 @@ class CaseConfig:
     lookback_hours: int = 1   # how many consecutive hours to stack as input channels
                                # 1 = single snapshot, 3 = T-2, T-1, T stacked
 
-    @property
-    def input_channel_names(self):
-        """Channel names in the order they appear in the X tensor."""
-        base_names = []
-        for param in self.atm_params:
-            base_names.extend(self.with_subparams.get(param, [param]))
 
-        if self.lookback_hours == 1:
-            return base_names
+# ── Zarr-backed config (new pipeline — no case concept) ───────────────────────
 
-        # Stack T-(lookback-1), ..., T-1, T — label each channel with its time offset
-        channel_names = []
-        for t_back in range(self.lookback_hours - 1, -1, -1):
-            suffix = f"_T-{t_back}" if t_back > 0 else "_T"
-            channel_names.extend([f"{n}{suffix}" for n in base_names])
-        return channel_names
+@dataclass(frozen=True)
+class ZarrConfig:
+    # ── Required fields (no defaults) ────────────────────────────────────────
+    era5_zarr:      str     # path to ERA5.zarr
+    lightning_zarr: str     # path to Lightning.zarr
+    atm_params:     list    # ERA5 variable names  e.g. ["cape", "u_500", ...]
+    train_start:    str     # "YYYY-MM-DD"
+    train_end:      str     # "YYYY-MM-DD"
+    val_start:      str     # "YYYY-MM-DD"
+    val_end:        str     # "YYYY-MM-DD"
+
+    # ── Optional fields (with defaults) ──────────────────────────────────────
+    test_start:     Optional[str]  = None
+    test_end:       Optional[str]  = None
+    lookback_hours: int            = 3     # stack T-(L-1), ..., T-1, T as input
+    hours_of_day:   Optional[list] = None  # None=all 24h; e.g. list(range(10,19))
 
     @property
     def expected_input_channels(self):
-        return len(self.input_channel_names)
+        return self.lookback_hours * len(self.atm_params)
