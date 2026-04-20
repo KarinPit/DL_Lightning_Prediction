@@ -83,15 +83,28 @@ ALL_PRESSURE_LEVELS = [
 # ── ENTLN helpers ─────────────────────────────────────────────────────────────
 
 def load_entln_mat(mat_path):
-    """Load a .mat ENTLN file → DataFrame with lat, lon, UTC."""
+    """Load a .mat ENTLN file → DataFrame with lat, lon, UTC.
+    Supports both scipy-readable structs and MATLAB table format (via pymatreader).
+    """
     print(f"  Loading ENTLN: {mat_path}")
-    S = scipy.io.loadmat(mat_path, squeeze_me=True, struct_as_record=False)
-    key = [k for k in S.keys() if not k.startswith('_')][0]
-    e = S[key]
-    lats = np.array(e.lat).flatten().astype(float)
-    lons = np.array(e.lon).flatten().astype(float)
+    from pymatreader import read_mat
+    data = read_mat(mat_path)
+    key  = [k for k in data.keys() if not k.startswith('_')][0]
+    tbl  = data[key]
+    print(f"  Fields: {list(tbl.keys())}")
+
+    # Try common lat/lon field names
+    lat_key = next((k for k in tbl if 'lat' in k.lower()), None)
+    lon_key = next((k for k in tbl if 'lon' in k.lower() or 'long' in k.lower()), None)
+    utc_key = next((k for k in tbl if 'utc' in k.lower() or 'time' in k.lower() or 'date' in k.lower()), None)
+
+    if not lat_key or not lon_key or not utc_key:
+        raise KeyError(f"Could not find lat/lon/UTC fields. Available: {list(tbl.keys())}")
+
+    lats = np.array(tbl[lat_key]).flatten().astype(float)
+    lons = np.array(tbl[lon_key]).flatten().astype(float)
     utc  = pd.to_datetime(
-        [str(u).strip() for u in np.array(e.UTC).flatten()],
+        [str(u).strip() for u in np.array(tbl[utc_key]).flatten()],
         format='%d-%b-%Y %H:%M:%S', errors='coerce'
     )
     df = pd.DataFrame({'lat': lats, 'lon': lons, 'UTC': utc}).dropna(subset=['UTC'])
