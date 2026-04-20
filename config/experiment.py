@@ -9,7 +9,7 @@ _KEY_LEVELS = [
 ]
 
 # Pressure-level variable short names (must match ERA5.zarr variable names)
-_PRESSURE_VARS = ['u', 'v', 'w', 't', 'q', 'ciwc', 'clwc']
+_PRESSURE_VARS = ['u', 'v', 'w', 't', 'q', 'ciwc']  # clwc excluded: all-zero in ERA5 pressure levels
 
 # Single-level surface / column variables — all 17 (matches good-results run)
 _SINGLE_VARS = [
