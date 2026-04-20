@@ -22,18 +22,23 @@ ENTLN_CASES_DIR = f'{BUCKET}/Lightning_Data/ENTLN/Cases'
 # ── Cases to fix (date range + ENTLN filename) ────────────────────────────────
 CASES_TO_FIX = [
     {
-        'name':      'Case5_Jan_2024_26_31',
-        'start':     '2024-01-26',
-        'end':       '2024-01-31',
-        'entln_file': f'{ENTLN_CASES_DIR}/ENTLN_pulse_Case5_Jan_2024_26_31.mat',
+        'name':       'Case2_Jan_2023_11_16',
+        'start':      '2023-01-11',
+        'end':        '2023-01-16',
+        'entln_file': f'{ENTLN_CASES_DIR}/ENTLN_pulse_Case2_Jan_2023_11_16_struct.mat',
     },
-    # Add more here if needed, e.g.:
-    # {
-    #     'name':  'Case1_Nov_2022_23_25',
-    #     'start': '2022-11-23',
-    #     'end':   '2022-11-25',
-    #     'entln_file': f'{ENTLN_CASES_DIR}/ENTLN_pulse_Case1_Nov_2022_23_25.mat',
-    # },
+    {
+        'name':       'Case3_Mar_2023_13_15',
+        'start':      '2023-03-13',
+        'end':        '2023-03-15',
+        'entln_file': f'{ENTLN_CASES_DIR}/ENTLN_pulse_Case3_Mar_2023_13_15_struct.mat',
+    },
+    {
+        'name':       'Case5_Jan_2024_26_31',
+        'start':      '2024-01-26',
+        'end':        '2024-01-31',
+        'entln_file': f'{ENTLN_CASES_DIR}/ENTLN_pulse_Case5_Jan_2024_26_31_struct.mat',
+    },
 ]
 
 
