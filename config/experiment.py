@@ -59,11 +59,16 @@ ZARR_CONFIG = ZarrConfig(
     ),
     # ^ = 17 + 7×37 = 276 vars × 3 lookback = 828 input channels
 
-    # Full Jan–Mar 2023 training (same as the run that produced good FSS/reliability)
-    train_ranges = [('2023-01-01', '2023-03-31')],
+    # Train on Cases 1–4, validate on Case 5
+    train_ranges = [
+        ('2022-11-23', '2022-11-25'),  # Case1 — Nov 2022
+        ('2023-01-11', '2023-01-16'),  # Case2 — Jan 2023
+        ('2023-03-13', '2023-03-15'),  # Case3 — Mar 2023
+        ('2023-04-09', '2023-04-13'),  # Case4 — Apr 2023
+    ],
 
-    val_start = '2023-04-01',
-    val_end   = '2023-04-30',
+    val_start = '2024-01-26',  # Case5 — Jan 2024
+    val_end   = '2024-01-31',
 
     lookback_hours = 3,
     hours_of_day   = None,
