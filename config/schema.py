@@ -103,8 +103,7 @@ class ZarrConfig:
     era5_zarr:      str     # path to ERA5.zarr
     lightning_zarr: str     # path to Lightning.zarr
     atm_params:     list    # ERA5 variable names  e.g. ["cape", "u_500", ...]
-    train_start:    str     # "YYYY-MM-DD"
-    train_end:      str     # "YYYY-MM-DD"
+    train_ranges:   list    # list of ("YYYY-MM-DD", "YYYY-MM-DD") pairs — one per training case
     val_start:      str     # "YYYY-MM-DD"
     val_end:        str     # "YYYY-MM-DD"
 
@@ -113,7 +112,16 @@ class ZarrConfig:
     test_end:       Optional[str]  = None
     lookback_hours: int            = 3     # stack T-(L-1), ..., T-1, T as input
     hours_of_day:   Optional[list] = None  # None=all 24h; e.g. list(range(10,19))
+    months_of_year: Optional[list] = None  # None=all months; e.g. [1,3,4] for Jan+Mar+Apr
 
     @property
     def expected_input_channels(self):
         return self.lookback_hours * len(self.atm_params)
+
+    @property
+    def months_label(self):
+        if self.months_of_year is None:
+            return 'all'
+        names = {1:'Jan',2:'Feb',3:'Mar',4:'Apr',5:'May',6:'Jun',
+                 7:'Jul',8:'Aug',9:'Sep',10:'Oct',11:'Nov',12:'Dec'}
+        return '+'.join(names[m] for m in sorted(self.months_of_year))

@@ -31,8 +31,6 @@ from training.train import train_model
 
 def parse_args():
     p = argparse.ArgumentParser(description='Train UNet lightning predictor on Zarr data')
-    p.add_argument('--train-start',  default=None, help='Override train_start (YYYY-MM-DD)')
-    p.add_argument('--train-end',    default=None, help='Override train_end   (YYYY-MM-DD)')
     p.add_argument('--val-start',    default=None, help='Override val_start   (YYYY-MM-DD)')
     p.add_argument('--val-end',      default=None, help='Override val_end     (YYYY-MM-DD)')
     p.add_argument(
@@ -54,8 +52,6 @@ def apply_overrides(zarr_cfg, model_cfg, args):
     """Return updated config objects based on CLI arguments."""
     # Build a new ZarrConfig with any CLI overrides applied
     overrides = {}
-    if args.train_start: overrides['train_start']  = args.train_start
-    if args.train_end:   overrides['train_end']    = args.train_end
     if args.val_start:   overrides['val_start']    = args.val_start
     if args.val_end:     overrides['val_end']      = args.val_end
     if args.hours:       overrides['hours_of_day'] = args.hours
@@ -67,8 +63,7 @@ def apply_overrides(zarr_cfg, model_cfg, args):
             era5_zarr      = zarr_cfg.era5_zarr,
             lightning_zarr = zarr_cfg.lightning_zarr,
             atm_params     = zarr_cfg.atm_params,
-            train_start    = overrides.get('train_start',    zarr_cfg.train_start),
-            train_end      = overrides.get('train_end',      zarr_cfg.train_end),
+            train_ranges   = zarr_cfg.train_ranges,
             val_start      = overrides.get('val_start',      zarr_cfg.val_start),
             val_end        = overrides.get('val_end',        zarr_cfg.val_end),
             test_start     = zarr_cfg.test_start,
@@ -106,7 +101,8 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'\n{"="*60}')
     print(f'Device        : {device}')
-    print(f'Train         : {zarr_cfg.train_start} → {zarr_cfg.train_end}')
+    train_ranges_str = ', '.join(f'{s}→{e}' for s, e in zarr_cfg.train_ranges)
+    print(f'Train         : {train_ranges_str}')
     print(f'Val           : {zarr_cfg.val_start}   → {zarr_cfg.val_end}')
     hours_label = sorted(zarr_cfg.hours_of_day) if zarr_cfg.hours_of_day else 'all 24'
     print(f'Hours of day  : {hours_label}')
@@ -119,18 +115,20 @@ def main():
     # ── Datasets ──────────────────────────────────────────────────────────────
     train_ds, val_ds = build_datasets(zarr_cfg, model_cfg)
 
+    # num_workers=0: data is preloaded in RAM — no I/O during training,
+    # so multiprocessing workers just add overhead from copying large arrays.
     train_loader = DataLoader(
         train_ds,
         batch_size  = model_cfg.batch_size,
         shuffle     = True,
-        num_workers = args.workers,
+        num_workers = 0,
         pin_memory  = (device.type == 'cuda'),
     )
     val_loader = DataLoader(
         val_ds,
         batch_size  = model_cfg.batch_size,
         shuffle     = False,
-        num_workers = max(1, args.workers // 2),
+        num_workers = 0,
         pin_memory  = (device.type == 'cuda'),
     )
 
@@ -182,12 +180,10 @@ def main():
     )
     model_name = (
         f"unet_lb{zarr_cfg.lookback_hours}"
-        f"_{zarr_cfg.train_start}_{zarr_cfg.train_end}"
+        f"_cases{len(zarr_cfg.train_ranges)}"
         f"_{hours_tag}"
         f"_{model_cfg.num_epochs}ep.pth"
     )
-
-    
     save_path = os.path.join(args.save_dir, model_name)
     torch.save(model.state_dict(), save_path)
     print(f'\nModel saved → {save_path}')
